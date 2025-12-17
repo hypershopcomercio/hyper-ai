@@ -1,0 +1,10 @@
+sqlalchemy
+psycopg2-binary
+requests
+python-dotenv
+apscheduler
+pydantic
+pydantic-settings
+tenacity
+flask
+flask-cors

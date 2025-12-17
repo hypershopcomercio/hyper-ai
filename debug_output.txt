@@ -1,0 +1,19 @@
+--- Token Status ---
+Token NOT found in DB
+
+--- Ads Status ---
+Total Ads: 93
+With SKU: 61
+Without SKU: 32
+
+--- Recent System Logs (Last 10) ---
+[INFO] sync_metrics: Synced orders for 2025-12-14, updated 10 items | None
+[INFO] sync_metrics: Synced visits for 73 ads on 2025-12-14 | None
+[INFO] sync_listings: Sync completed | {"synced": 93, "errors": 0}
+[INFO] sync_listings: Sync completed | {"synced": 93, "errors": 0}
+[INFO] sync_listings: Sync completed | {"synced": 93, "errors": 0}
+[INFO] sync_metrics: Synced visits for 0 ads on 2025-12-14 | None
+[INFO] sync_listings: Sync completed | {"synced": 0, "errors": 93}
+[INFO] sync_listings: Sync completed | {"synced": 0, "errors": 93}
+[INFO] sync_metrics: Synced visits for 0 ads on 2025-12-14 | None
+[INFO] sync_listings: Sync completed | {"synced": 0, "errors": 93}
