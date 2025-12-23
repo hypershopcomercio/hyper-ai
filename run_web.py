@@ -38,6 +38,22 @@ if __name__ == "__main__":
     scheduler.add_job(func=run_sync_job, trigger="interval", minutes=30)
     scheduler.start()
     
+    # Initialize Webhook Processor
+    from app.api.endpoints.webhooks import webhook_queue
+    from app.services.webhook_processor import init_processor
+    from app.core.database import SessionLocal
+    from app.services.meli_api import MeliApiService
+    
+    def db_factory():
+        return SessionLocal()
+    
+    def meli_factory(db):
+        return MeliApiService(db_session=db)
+    
+    processor = init_processor(webhook_queue, db_factory, meli_factory)
+    processor.start()
+    print("WEBHOOK_PROCESSOR: Started")
+    
     # Enable CORS for development (allowing frontend localhost:3000)
     from flask_cors import CORS
     CORS(app) 
