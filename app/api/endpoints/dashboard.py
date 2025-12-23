@@ -389,8 +389,15 @@ def get_dashboard_metrics():
         # 7. Cash Flow (Chart)
         cash_flow_data = get_cash_flow_data(db, start_date_br.date(), end_date_br.date(), tz_br)
         
-        # 8. Conversion Badges
-        badges = get_conversion_distribution(db, start_date_br.date(), start_date_utc)
+        # 8. Conversion Badges (with trend and top converters)
+        badges = get_conversion_distribution(
+            db, 
+            start_date_br.date(), 
+            start_date_utc,
+            end_date_local=end_date_br.date(),
+            current_visits=visits_current,
+            current_sales=sales_count_current
+        )
         
         return jsonify({
             "total_ads": total_ads,
@@ -479,10 +486,103 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
 
     return list(chart_data.values())
 
-def get_conversion_distribution(db, start_date_local, start_dt_utc):
-    # Placeholder logic
-    return [
-        {"val": 0, "label": "BONS", "color": "text-emerald-400"},
-        {"val": 0, "label": "MÉD", "color": "text-amber-400"},
-        {"val": 0, "label": "RUIM", "color": "text-rose-400"}
-    ]
+def get_conversion_distribution(db, start_date_local, start_dt_utc, end_date_local=None, current_visits=0, current_sales=0):
+    """
+    Calculate conversion stats including:
+    - Conversion trend vs previous period
+    - Top converting ads (with links)
+    - Distribution by conversion quality (BONS, MÉD, RUIM)
+    """
+    from app.models.ml_metrics_daily import MlMetricsDaily
+    from app.models.ad import Ad
+    
+    # Calculate period duration
+    if end_date_local:
+        period_days = (end_date_local - start_date_local).days + 1
+    else:
+        period_days = 7  # Default
+    
+    # Current conversion rate
+    current_conversion = (current_sales / current_visits * 100) if current_visits > 0 else 0
+    
+    # Calculate previous period conversion (for trend)
+    prev_start = start_date_local - timedelta(days=period_days)
+    prev_end = start_date_local - timedelta(days=1)
+    
+    prev_visits_q = db.query(func.sum(MlMetricsDaily.visits)).filter(
+        MlMetricsDaily.date >= prev_start,
+        MlMetricsDaily.date <= prev_end
+    ).scalar() or 0
+    
+    prev_sales_q = db.query(func.sum(MlMetricsDaily.sales_qty)).filter(
+        MlMetricsDaily.date >= prev_start,
+        MlMetricsDaily.date <= prev_end
+    ).scalar() or 0
+    
+    prev_conversion = (prev_sales_q / prev_visits_q * 100) if prev_visits_q > 0 else 0
+    
+    # Calculate trend
+    if prev_conversion > 0:
+        conversion_trend = ((current_conversion - prev_conversion) / prev_conversion) * 100
+    else:
+        conversion_trend = 0 if current_conversion == 0 else 100
+    
+    # Get top converting ads (ads with best visits-to-sales ratio)
+    # Join metrics with ads to get top performers
+    top_ads_query = db.query(
+        MlMetricsDaily.item_id,
+        func.sum(MlMetricsDaily.visits).label('total_visits'),
+        func.sum(MlMetricsDaily.sales_qty).label('total_sales')
+    ).filter(
+        MlMetricsDaily.date >= start_date_local,
+        MlMetricsDaily.date <= (end_date_local if end_date_local else start_date_local + timedelta(days=period_days))
+    ).group_by(
+        MlMetricsDaily.item_id
+    ).having(
+        func.sum(MlMetricsDaily.visits) > 10  # Minimum visits for relevance
+    ).order_by(
+        desc(func.sum(MlMetricsDaily.sales_qty) / func.nullif(func.sum(MlMetricsDaily.visits), 0))
+    ).limit(5).all()
+    
+    # Fetch ad details
+    top_converters = []
+    for row in top_ads_query:
+        ad = db.query(Ad).filter(Ad.id == row.item_id).first()
+        if ad and row.total_visits > 0:
+            conv_rate = (row.total_sales / row.total_visits) * 100
+            top_converters.append({
+                "id": ad.id,
+                "title": ad.title[:40] + "..." if len(ad.title) > 40 else ad.title,
+                "thumbnail": ad.thumbnail,
+                "visits": row.total_visits,
+                "sales": row.total_sales,
+                "conversion_rate": round(conv_rate, 2)
+            })
+    
+    # Distribution by conversion quality
+    bons = 0  # > 3%
+    medio = 0  # 1-3%
+    ruim = 0  # < 1%
+    
+    for ad in top_ads_query:
+        if ad.total_visits > 0:
+            rate = (ad.total_sales / ad.total_visits) * 100
+            if rate > 3:
+                bons += 1
+            elif rate >= 1:
+                medio += 1
+            else:
+                ruim += 1
+    
+    return {
+        "trend": round(conversion_trend, 2),
+        "is_positive": conversion_trend >= 0,
+        "current_rate": round(current_conversion, 2),
+        "prev_rate": round(prev_conversion, 2),
+        "top_converters": top_converters,
+        "distribution": [
+            {"val": bons, "label": "BONS", "color": "text-emerald-400"},
+            {"val": medio, "label": "MÉD", "color": "text-amber-400"},
+            {"val": ruim, "label": "RUIM", "color": "text-rose-400"}
+        ]
+    }
