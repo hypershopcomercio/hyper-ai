@@ -88,7 +88,18 @@ class WebhookProcessor:
             self.processed_count += 1
             self.last_processed_at = datetime.utcnow()
             
-            # Notify SSE subscribers
+            # Broadcast to SSE clients
+            try:
+                from app.api.endpoints.sse import broadcast_event
+                broadcast_event('webhook_processed', {
+                    'topic': topic,
+                    'resource': resource,
+                    'timestamp': self.last_processed_at.isoformat()
+                })
+            except Exception as sse_err:
+                logger.warning(f"[WEBHOOK_PROCESSOR] SSE broadcast failed: {sse_err}")
+            
+            # Notify internal subscribers (legacy)
             self._notify_subscribers({
                 'type': 'webhook_processed',
                 'topic': topic,
