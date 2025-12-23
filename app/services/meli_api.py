@@ -86,12 +86,56 @@ class MeliApiService:
     def get_headers(self):
         return {"Authorization": f"Bearer {self.access_token}"}
 
+    def request(self, method: str, endpoint: str, params: dict = None, json_data: dict = None):
+        """
+        Generic request method with automatic token refresh.
+        Endpoint should be relative, e.g. '/orders/search'
+        """
+        url = f"{self.base_url}{endpoint}"
+        
+        # Headers might need refresh, so we get them inside the loop or use self.get_headers() which uses current self.access_token
+        
+        try:
+            # Added timeout=30 to prevent hangs
+            resp = requests.request(method, url, headers=self.get_headers(), params=params, json=json_data, timeout=30)
+            
+            # Token Refresh on 401
+            if resp.status_code == 401:
+                logger.warning(f"401 Unauthorized for {endpoint}. Refreshing token...")
+                
+                local_session = False
+                db = self.db_session
+                if not db:
+                     from app.core.database import SessionLocal
+                     db = SessionLocal()
+                     local_session = True
+                
+                try:
+                    token_record = db.query(OAuthToken).filter(OAuthToken.provider == "mercadolivre").first()
+                    if token_record:
+                        self.access_token = self._refresh_token(db, token_record)
+                        # Retry
+                        resp = requests.request(method, url, headers=self.get_headers(), params=params, json=json_data, timeout=30)
+                    else:
+                        logger.error("No token to refresh.")
+                except Exception as e:
+                    logger.error(f"Refresh failed: {e}")
+                finally:
+                    if local_session:
+                        db.close()
+            
+            return resp
+            
+        except requests.RequestException as e:
+            logger.error(f"Request Error for {endpoint}: {e}")
+            raise
+
     def get_user_items(self, user_id: str):
         url = f"{self.base_url}/users/{user_id}/items/search"
         params = {"search_type": "scan", "status": "active", "limit": 100}
         items = []
         while True:
-            response = requests.get(url, params=params, headers=self.get_headers())
+            response = requests.get(url, params=params, headers=self.get_headers(), timeout=30)
             response.raise_for_status()
             data = response.json()
             items.extend(data.get("results", []))
@@ -203,6 +247,19 @@ class MeliApiService:
                 break
         return orders
 
+
+    def get_order(self, order_id: str):
+        """Fetch single order by ID."""
+        url = f"{self.base_url}/orders/{order_id}"
+        resp = requests.get(url, headers=self.get_headers())
+        if resp.status_code == 200:
+            return resp.json()
+        elif resp.status_code == 401:
+             # Refresh logic (simplified dup from get_orders for now)
+             # Ideally reuse _refresh...
+             pass
+        logger.warning(f"Failed to fetch order {order_id}: {resp.status_code}")
+        return None
 
     def get_ads_performance(self, item_ids: list[str], date_from: datetime.date, date_to: datetime.date):
         """

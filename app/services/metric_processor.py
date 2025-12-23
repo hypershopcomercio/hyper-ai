@@ -117,3 +117,44 @@ class MetricProcessor:
         
         self.db.commit()
         logger.info(f"Processed metrics for {count} ads.")
+
+    def aggregate_sales_metrics(self):
+        """
+        Aggregates sales from MlOrders into Ad.sales_30d.
+        """
+        logger.info("Aggregating Sales Metrics from Orders...")
+        try:
+            # Reset sales_30d for active ads first (optional, but safer to avoid stale data if no orders)
+            # self.db.query(Ad).update({Ad.sales_30d: 0}) # Might be heavy?
+            # Better: query aggregation first, then bulk update.
+            
+            today = datetime.date.today()
+            start_date = today - datetime.timedelta(days=30)
+            
+            # Query: ItemID, Sum(Quantity)
+            from app.models.ml_order import MlOrder, MlOrderItem
+            
+            results = self.db.query(
+                MlOrderItem.ml_item_id,
+                func.sum(MlOrderItem.quantity)
+            ).join(MlOrder, MlOrder.ml_order_id == MlOrderItem.ml_order_id)\
+             .filter(MlOrder.date_created >= start_date)\
+             .group_by(MlOrderItem.ml_item_id)\
+             .all()
+             
+            # Update Ads
+            # We can iterate and update.
+            count = 0
+            for item_id, total_qty in results:
+                if total_qty:
+                    ad = self.db.query(Ad).filter(Ad.id == item_id).first()
+                    if ad:
+                        ad.sales_30d = int(total_qty)
+                        count += 1
+            
+            self.db.commit()
+            logger.info(f"Updated sales_30d for {count} ads.")
+            
+        except Exception as e:
+            logger.error(f"Failed to aggregate sales metrics: {e}")
+            self.db.rollback()

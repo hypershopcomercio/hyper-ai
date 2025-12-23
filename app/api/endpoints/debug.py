@@ -1,133 +1,92 @@
-
-from flask import jsonify
+from flask import jsonify, request
 from app.api import api_bp
-from app.services.meli_auth import MeliAuthService
-import requests
+from app.services.meli_api import MeliApiService
+from app.core.database import SessionLocal
+from datetime import datetime, timedelta, timezone
+import os
 
-@api_bp.route('/debug/ml-test', methods=['GET'])
-def test_ml_connection():
-    auth = MeliAuthService()
-    results = {
-        "token_status": "unknown",
-        "me_endpoint": None,
-        "search_endpoint": None,
-        "error": None
-    }
-    
-    try:
-        token = auth.get_valid_token()
-        if not token:
-            results["token_status"] = "missing_or_invalid"
-            return jsonify(results)
-        
-        results["token_status"] = "valid_format"
-        headers = {"Authorization": f"Bearer {token}"}
-        
-        # 1. Users/Me
-        try:
-            me_res = requests.get("https://api.mercadolibre.com/users/me", headers=headers)
-            results["me_endpoint"] = {
-                "status": me_res.status_code,
-                "data": me_res.json() if me_res.status_code == 200 else me_res.text
-            }
-            seller_id = me_res.json().get("id")
-        except Exception as e:
-            results["me_endpoint"] = {"error": str(e)}
-            seller_id = None
-            
-        # 2. Search Items
-        if seller_id:
-            try:
-                url = f"https://api.mercadolibre.com/users/{seller_id}/items/search?limit=5"
-                search_res = requests.get(url, headers=headers)
-                results["search_endpoint"] = {
-                    "status": search_res.status_code,
-                    "url": url,
-                    "data": search_res.json() if search_res.status_code == 200 else search_res.text
-                }
-            except Exception as e:
-                results["search_endpoint"] = {"error": str(e)}
-                
-        return jsonify(results)
-        
-    except Exception as e:
-        results["error"] = str(e)
-        return jsonify(results), 500
-
-@api_bp.route('/debug/db-test', methods=['GET'])
-def test_db_connection():
-    from sqlalchemy import text
-    from app.core.database import SessionLocal
-    
+@api_bp.route('/debug/orders-test', methods=['GET'])
+def debug_orders_test():
     db = SessionLocal()
-    results = {
-        "database": {"connected": False, "name": "unknown", "time": None},
-        "tables": {},
-        "counts": {},
-        "ml_token": {"exists": False}
-    }
-    
     try:
-        # 1. Test Connection
-        try:
-            res = db.execute(text("SELECT NOW() as time, current_database() as db"))
-            row = res.fetchone()
-            results["database"] = {
-                "connected": True,
-                "name": row[1],
-                "time": str(row[0])
-            }
-        except Exception as e:
-            results["database"]["error"] = str(e)
-            return jsonify(results), 500
-
-        # 2. Check Tables (Mapping User requested 'sync.*' to actual 'public.*')
-        # Structure: user_name -> actual_table
-        table_map = {
-            "ml_listings": "ads",
-            "ml_daily_metrics": "metrics",
-            "tiny_products": "tiny_products",
-            "oauth_tokens": "oauth_tokens"
-        }
+        service = MeliApiService(db_session=db)
+        seller_id = service.get_seller_id() if hasattr(service, 'get_seller_id') else None
         
-        for key, table_name in table_map.items():
-            try:
-                # Check existence (in public schema)
-                exists_query = text(f"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{table_name}')")
-                exists = db.execute(exists_query).scalar()
-                results["tables"][key] = bool(exists)
-                
-                # Check count if exists
-                if exists:
-                    count = db.execute(text(f"SELECT COUNT(*) FROM {table_name}")).scalar()
-                    results["counts"][key] = count
-                else:
-                    results["counts"][key] = 0
-            except Exception as e:
-                results["tables"][key] = f"Error: {e}"
+        # Fallback if method doesn't exist on service (it's in SyncEngine normally)
+        if not seller_id:
+             from app.models.oauth_token import OAuthToken
+             token = db.query(OAuthToken).filter(OAuthToken.provider == "mercadolivre").first()
+             seller_id = token.user_id if token else "Unknown"
 
-        # 3. Check ML Token
-        try:
-            # Using raw SQL to avoid model dependency issues here
-            token_res = db.execute(text("SELECT provider, seller_id, expires_at, created_at FROM oauth_tokens WHERE provider = 'mercadolivre'"))
-            token = token_res.fetchone()
+        # Timezone: Brasilia (UTC-3)
+        # "Hoje" in Brasilia
+        tz_offset = timezone(timedelta(hours=-3))
+        now = datetime.now(tz_offset)
+        start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Convert to ISO with Offset for API? 
+        # API expects ISO. usually UTC or Offset.
+        # Start of Day in UTC:
+        # If it is 00:00 -03:00, that is 03:00 UTC.
+        start_iso = start_of_day.isoformat()
+        now_iso = now.isoformat()
+        
+        print(f"DEBUG: Fetching from {start_iso} to {now_iso}")
+        
+        # Call API directly
+        # service.get_orders supports date_from/to
+        # ensure get_orders passes the params correctly
+        # MeliApiService.get_orders signature: (seller_id, item_id, date_from, date_to)
+        
+        orders = service.get_orders(seller_id, date_from=start_iso, date_to=now_iso)
+        
+        total_amount = 0.0
+        total_orders = 0
+        paid_orders = 0
+        
+        results = []
+        for o in orders:
+            total_orders += 1
+            if o.get("status") == "paid":
+                paid_orders += 1
+                total_amount += float(o.get("total_amount", 0))
             
-            if token:
-                results["ml_token"] = {
-                    "exists": True,
-                    "seller_id": token[1],
-                    "expires_at": str(token[2]),
-                    "created_at": str(token[3])
-                }
-            else:
-                results["ml_token"] = {"exists": False, "message": "No token with provider='mercadolivre' found"}
-                
-        except Exception as e:
-            results["ml_token"]["error"] = str(e)
-
-        return jsonify(results)
+            # Serialize for response
+            results.append({
+                "id": o.get("id"),
+                "status": o.get("status"),
+                "total": o.get("total_amount"),
+                "date": o.get("date_created"),
+                "date_closed": o.get("date_closed")
+            })
+            
+        return jsonify({
+            "debug": True,
+            "periodo": { "from": start_iso, "to": now_iso },
+            "apiResponse": {
+                "total_encontrado": len(orders),
+                "pedidos_pagos": paid_orders,
+                "valor_total": total_amount
+            },
+            "all_ids": [str(o.get('id')) for o in orders], # Return ALL IDs for comparison
+            "primeiros_pedidos": results[:10] 
+        })
         
     except Exception as e:
-        return jsonify({"fatal_error": str(e)}), 500
+        return jsonify({ "error": str(e) }), 500
     finally:
         db.close()
+
+@api_bp.route('/debug/timezone', methods=['GET'])
+def debug_timezone():
+    now = datetime.now()
+    tz_br = timezone(timedelta(hours=-3))
+    now_br = datetime.now(tz_br)
+    
+    return jsonify({
+        "server_time_utc_naive": now.isoformat(),
+        "server_local_br": now_br.isoformat(),
+        "env_tz": os.environ.get("TZ", "Not Set"),
+        "today_utc_start": now.replace(hour=0,minute=0,second=0,microsecond=0).isoformat(),
+        "today_br_start": now_br.replace(hour=0,minute=0,second=0,microsecond=0).isoformat()
+    })

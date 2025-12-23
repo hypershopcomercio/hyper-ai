@@ -78,7 +78,7 @@ from app.services.sync_engine import SyncEngine
 def sync_tiny():
     engine = SyncEngine()
     try:
-        engine.sync_tiny_costs()
+        engine.sync_tiny_stock()
         return jsonify({"success": True, "message": "Tiny ERP Sync Triggered"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -137,28 +137,116 @@ def get_sync_status():
         if token:
              # Check if expired or close
              # We can't easily check actual validity without request, but check expiry field
-             if token.expires_at and token.expires_at > datetime.now(token.expires_at.tzinfo):
-                 ml_connected = True
-                 seller_id = token.seller_id
-             elif not token.expires_at:
+             
+             # Safely handle timezone for expiration check
+             now_ts = datetime.now()
+             expires_ts = token.expires_at
+             
+             if expires_ts:
+                 # Normalize to naive for comparison
+                 if expires_ts.tzinfo:
+                     expires_ts = expires_ts.replace(tzinfo=None)
+                 
+                 if expires_ts > now_ts:
+                     ml_connected = True
+                     seller_id = token.seller_id
+             else:
                  # If no expiry recorded, assume connected (legacy) or unknown
                  ml_connected = True
                  seller_id = token.seller_id
 
         # Last Sync info
-        last_log = db.query(SystemLog).filter(SystemLog.module == 'sync_listings').order_by(desc(SystemLog.timestamp)).first()
+        # ML Sync Status
+        modules = ['listings', 'visits', 'orders', 'metrics_processing']
+        is_syncing_ml = False
+        last_log_ml = None
+        
+        for mod in modules:
+            log = db.query(SystemLog).filter(SystemLog.module == mod).order_by(desc(SystemLog.timestamp)).first()
+            if log:
+                # Keep the latest timestamp for "last_sync" display purpose? 
+                # Actually, "last_sync" usually refers to successful completion.
+                # Let's fix last_log_ml to be the last COMPLETED 'listings' or 'metrics' log for display?
+                # User wants to know when data was last fresh. 'listings' success is a good proxy.
+                if mod == 'listings' and log.status != 'running':
+                     last_log_ml = log
+
+                if log.status == 'running':
+                    # Check staleness
+                    timeout = 3600 if mod == 'listings' else 1800 # 1h for listings, 30m for others
+                    # Handle TZ aware vs naive
+                    log_ts = log.timestamp.replace(tzinfo=None) if log.timestamp else datetime.min
+                    if (datetime.now() - log_ts).total_seconds() < timeout:
+                        is_syncing_ml = True
+        
+        # Fallback if loop didn't set last_log_ml (e.g. only running logs exist or no logs)
+        if not last_log_ml:
+             last_log_ml = db.query(SystemLog).filter(SystemLog.module == 'listings', SystemLog.status == 'success').order_by(desc(SystemLog.timestamp)).first()
+
         ads_count = db.query(Ad).count()
+        
+        # Tiny Status
+        from app.models.system_config import SystemConfig
+        tiny_config = db.query(SystemConfig).filter_by(key="TINY_API_TOKEN").first()
+        tiny_connected = bool(tiny_config and tiny_config.value)
+        
+        last_log_tiny = db.query(SystemLog).filter(SystemLog.module == 'stock').order_by(desc(SystemLog.timestamp)).first()
+        is_syncing_tiny = False
+        if last_log_tiny and last_log_tiny.status == 'running':
+             log_ts = last_log_tiny.timestamp.replace(tzinfo=None) if last_log_tiny.timestamp else datetime.min
+             if (datetime.now() - log_ts).total_seconds() < 600: # 10 mins for stock
+                 is_syncing_tiny = True
         
         return jsonify({
             "ml": {
                 "connected": ml_connected,
                 "seller_id": seller_id,
-                "last_sync": last_log.timestamp.isoformat() if last_log else None,
-                "ads_count": ads_count
+                "last_sync": last_log_ml.timestamp.isoformat() if last_log_ml else None,
+                "ads_count": ads_count,
+                "syncing": is_syncing_ml
             },
             "tiny": {
-                "connected": False # Placeholder for now
+                "connected": tiny_connected,
+                "has_token": tiny_connected,
+                "last_sync": last_log_tiny.timestamp.isoformat() if last_log_tiny else None,
+                "syncing": is_syncing_tiny
             }
+        })
+    except Exception as e:
+        print(f"Error in get_sync_status: {e}")
+        # Return partial status or safe fallback to avoid frontend crash
+        return jsonify({
+            "ml": {"connected": False, "syncing": False, "error": str(e)},
+            "tiny": {"connected": False, "syncing": False}
         })
     finally:
         db.close()
+
+@api_bp.route('/jobs/trigger-sync', methods=['POST'])
+def trigger_sync_manual():
+    from threading import Thread
+    from app.scheduler.tasks import run_daily_sync
+    
+    # Pre-log 'running' state to avoid race condition with frontend polling
+    # Use direct SQL or Session to be fast
+    db = SessionLocal()
+    try:
+        from app.models.system_log import SystemLog
+        # Create a placeholder running log
+        # We match module='listings' because that's what get_sync_status checks for 'last_sync' start
+        log = SystemLog(
+            module='listings',
+            status='running',
+            message='Manual Trigger',
+            timestamp=datetime.now()
+        )
+        db.add(log)
+        db.commit()
+    except Exception as e:
+        print(f"Failed to pre-log sync status: {e}")
+    finally:
+        db.close()
+        
+    thread = Thread(target=run_daily_sync)
+    thread.start()
+    return jsonify({"message": "Sync job triggered in background"}), 202

@@ -73,6 +73,13 @@ class Ad(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_updated = Column(DateTime, nullable=True) # Sync timestamp
+    
+    # Hyper Sync 2.0 New Fields
+    subtitle = Column(String)
+    seller_custom_field = Column(String)
+    start_time = Column(DateTime(timezone=True))
+    stop_time = Column(DateTime(timezone=True))
+    raw_data = Column(JSON)     # Full payload backup
 
     # Relationships
     # variations = relationship("AdVariation", back_populates="ad", cascade="all, delete-orphan")

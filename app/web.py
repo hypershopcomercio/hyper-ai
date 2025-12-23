@@ -24,13 +24,6 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(func=run_daily_sync, trigger="cron", hour=4, minute=0)
 scheduler.start()
 
-# Helper route to trigger manually for testing
-@app.route("/jobs/trigger-sync", methods=["POST"])
-def trigger_sync_manual():
-    from threading import Thread
-    thread = Thread(target=run_daily_sync)
-    thread.start()
-    return jsonify({"message": "Sync job triggered in background"}), 202
 
 
 @app.route("/oauth/meli/callback", methods=["GET"])

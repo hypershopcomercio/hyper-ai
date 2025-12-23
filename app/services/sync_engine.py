@@ -2,6 +2,8 @@
 import logging
 import datetime
 import time 
+import concurrent.futures
+import sqlalchemy
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -15,7 +17,11 @@ from app.models.system_config import SystemConfig
 from app.models.tiny_product import TinyProduct
 from app.models.ad_tiny_link import AdTinyLink
 from app.models.ad_variation import AdVariation
+from app.models.ad_variation import AdVariation
 from app.services.margin_calculator import MarginCalculatorService
+from app.models.sync import SyncControl
+from app.services.sync_v2.initial_load import InitialLoadService
+from app.services.sync_v2.incremental import IncrementalSyncService
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +38,10 @@ class SyncEngine:
         self.margin_calculator = MarginCalculatorService()
         from app.services.metric_processor import MetricProcessor
         self.metric_processor = MetricProcessor(self.db)
+        
+        # V2 Services
+        self.init_service = InitialLoadService(self.db)
+        self.inc_service = IncrementalSyncService(self.db)
 
     def get_seller_id(self):
         token = self.db.query(OAuthToken).filter(OAuthToken.provider == "mercadolivre").first()
@@ -39,40 +49,68 @@ class SyncEngine:
             return token.user_id
         return settings.MELI_USER_ID
 
+    # Legacy / Mixed Wrapper
+    def sync_orders_incremental(self, lookback_hours: int = None):
+        """
+        Triggers the V2 Incremental Sync for orders.
+        """
+        logger.info(f"Triggering V2 Incremental Sync Orders (lookback={lookback_hours})...")
+        self.inc_service.sync_orders_incremental(lookback_hours=lookback_hours)
+
+    def check_initial_load(self):
+        """
+        Triggers V2 Initial Load if not done.
+        """
+        control = self.db.query(SyncControl).filter(SyncControl.entity == 'orders').first()
+        if not control or control.initial_load_status != 'completed':
+            logger.info("Starting V2 Initial Load Orders...")
+            self.init_service.load_orders()
+            
+        # Ads
+        control_ads = self.db.query(SyncControl).filter(SyncControl.entity == 'ads').first()
+        if not control_ads or control_ads.initial_load_status != 'completed':
+            logger.info("Starting V2 Initial Load Ads...")
+            self.init_service.load_ads()
+
     def _log_sync(self, log_type: str, status: str, processed=0, success=0, error=0, msg=None, details=None, start_time=None):
         try:
             duration = None
             if start_time:
                 duration = int((datetime.datetime.now() - start_time).total_seconds() * 1000)
                 
-            # Direct SQL execution for log to avoid model import issues or transaction conflicts
-            sql = """
-            INSERT INTO sync_logs (type, status, records_processed, records_success, records_error, duration_ms, error_message, details, started_at, completed_at)
-            VALUES (:type, :status, :processed, :success, :error, :duration, :msg, :details, :started_at, :completed_at)
-            """
+            level = "ERROR" if status == "error" else "INFO"
+            
             import json
-            params = {
-                "type": log_type,
-                "status": status,
+            detail_data = {
                 "processed": processed,
                 "success": success,
-                "error": error,
-                "duration": duration,
-                "msg": msg,
-                "details": json.dumps(details) if details else None,
-                "started_at": start_time,
-                "completed_at": datetime.datetime.now()
+                "error_count": error,
+                "raw_details": details
             }
-            from sqlalchemy import text
-            with self.db.begin_nested():
-                self.db.execute(text(sql), params)
+            
+            sql = "INSERT INTO system_logs (module, level, message, details, duration_ms, status, timestamp) VALUES (:module, :level, :message, :details, :duration, :status, NOW())"
+            
+            params = {
+                "module": log_type,
+                "level": level,
+                "message": msg or f"Sync {status}",
+                "details": json.dumps(detail_data),
+                "duration": duration,
+                "status": status
+            }
+            
+            self.db.execute(sqlalchemy.text(sql), params)
             self.db.commit()
+            
         except Exception as e:
-            logger.error(f"Failed to write sync log: {e}")
+            logger.error(f"Failed to write log: {e}")
+            self.db.rollback()
 
     def sync_ads(self):
         logger.info("Starting Ads Sync...")
         start_time = datetime.datetime.now()
+        self._log_sync("listings", "running", start_time=start_time)
+
         processed_count = 0
         success_count = 0
         error_count = 0
@@ -82,13 +120,10 @@ class SyncEngine:
             if not seller_id:
                 raise Exception("No Seller ID found.")
 
-            # Get Items with robust pagination (scrolling if possible, but existing method is offset based?)
-            # MeliApiService.get_user_items usually handles scrolling.
             item_ids = self.meli_service.get_user_items(seller_id)
             total_items = len(item_ids)
             logger.info(f"Found {total_items} active items.")
             
-            # Chunking 50 items
             chunk_size = 50
             for i in range(0, total_items, chunk_size):
                 chunk = item_ids[i:i+chunk_size]
@@ -102,8 +137,7 @@ class SyncEngine:
                             logger.error(f"Failed to process ad {item.get('id')}: {e_item}")
                             error_count += 1
                         processed_count += 1
-                    
-                    self.db.commit() # Commit per chunk
+                    self.db.commit() 
                 except Exception as e_chunk:
                     logger.error(f"Chunk failed: {e_chunk}")
                     error_count += len(chunk)
@@ -115,8 +149,6 @@ class SyncEngine:
             self.db.rollback()
             logger.error(f"Ads Sync failed: {e}")
             self._log_sync("listings", "error", processed_count, success_count, error_count, str(e), start_time=start_time)
-        finally:
-            self.db.close()
 
     def _upsert_ad(self, item_data: dict, seller_id: str):
         ad_id = item_data["id"]
@@ -127,39 +159,26 @@ class SyncEngine:
         
         ad.seller_id = seller_id
         ad.title = item_data.get("title")[:500]
-        ad.category_name = item_data.get("category_id") # We only get ID here usually, Name requires category endpoint. Leaving as ID for now or fetch later.
-        
-        # Extended Fields (Sprint 1)
+        ad.category_name = item_data.get("category_id") 
         ad.permalink = item_data.get("permalink")
         ad.thumbnail = item_data.get("thumbnail")
-        ad.pictures = item_data.get("pictures") # JSON
-        ad.attributes = item_data.get("attributes") # JSON
+        ad.pictures = item_data.get("pictures") 
+        ad.attributes = item_data.get("attributes") 
         ad.video_id = item_data.get("video_id")
-        
-        # Prices
         ad.price = float(item_data.get("price", 0))
         ad.original_price = float(item_data.get("original_price")) if item_data.get("original_price") else None
         ad.currency_id = item_data.get("currency_id")
-        
-        # Stock
         ad.available_quantity = int(item_data.get("available_quantity", 0))
         ad.sold_quantity = int(item_data.get("sold_quantity", 0))
-        
-        # Status
         ad.status = item_data.get("status")
         ad.listing_type_id = item_data.get("listing_type_id")
-        ad.listing_type = item_data.get("listing_type_id") # Map manual names later if needed
-        
-        # Shipping
+        ad.listing_type = item_data.get("listing_type_id") 
         shipping = item_data.get("shipping", {})
         ad.free_shipping = shipping.get("free_shipping", False)
-        ad.shipping_mode = shipping.get("mode") # me2, etc
+        ad.shipping_mode = shipping.get("mode") 
         ad.is_full = (shipping.get("logistic_type") == "fulfillment")
-        
-        # Health
         ad.health = float(item_data.get("health", 0)) if item_data.get("health") else 0.0
 
-        # SKU/GTIN extraction
         sku = None
         gtin = None
         for attr in item_data.get("attributes", []):
@@ -173,7 +192,6 @@ class SyncEngine:
         ad.sku = sku
         ad.gtin = gtin
         
-        # Estimated Shipping Cost (if free shipping)
         ad.shipping_cost = 0.0
         if ad.free_shipping:
              ad.shipping_cost = self.meli_service.get_shipping_cost(ad.id, seller_id)
@@ -181,7 +199,6 @@ class SyncEngine:
         ad.last_updated = datetime.datetime.now()
         ad.updated_at = datetime.datetime.now()
         
-        # Variations
         if "variations" in item_data and item_data["variations"]:
              self._upsert_variations(ad.id, item_data["variations"])
 
@@ -211,10 +228,14 @@ class SyncEngine:
                       comb.append(f"{comb_attr.get('name')}: {comb_attr.get('value_name')}")
             variation.attribute_combination = ", ".join(comb)
 
-    # --- SPRINT 2 IMPLEMENTATION ---
+    def _fetch_visits_wrapper(self, ad_id):
+        try:
+             return self.meli_service.get_visits_time_window(ad_id, last=30, unit="day")
+        except Exception as e:
+             logger.error(f"Thread fetch failed for {ad_id}: {e}")
+             return None
 
     def sync_visits(self):
-        """Syncs visits for all active listings and updates daily metrics."""
         logger.info("Starting Visits Sync...")
         start_time = datetime.datetime.now()
         processed = 0
@@ -223,52 +244,53 @@ class SyncEngine:
         
         try:
             seller_id = self.get_seller_id()
-            ads = self.db.query(Ad).filter(Ad.status == 'active').all() # Focus on active ads
+            ads = self.db.query(Ad).filter(Ad.status == 'active').all() 
             total = len(ads)
-            logger.info(f"Syncing visits for {total} active ads.")
+            logger.info(f"Syncing visits for {total} active ads (Parallel).")
             
-            for ad in ads:
-                try:
-                    # Fetch Visits
-                    # Get last 7 days + today logic? 
-                    # Meli returns visits by day. Let's get last 30 days to fill history.
-                    data = self.meli_service.get_visits_time_window(ad.id, last=30, unit="day")
-                    
-                    if data and "results" in data:
-                        for day_data in data["results"]:
-                            v_date_str = day_data.get("date")[:10] # YYYY-MM-DD
-                            v_count = day_data.get("visits", 0)
-                            v_date = datetime.datetime.strptime(v_date_str, "%Y-%m-%d").date()
-                            
-                            # Upsert MlVisit
-                            visit_rec = self.db.query(MlVisit).filter(MlVisit.item_id == ad.id, MlVisit.date == v_date).first()
-                            if not visit_rec:
-                                visit_rec = MlVisit(item_id=ad.id, date=v_date)
-                                self.db.add(visit_rec)
-                            
-                            visit_rec.visits = v_count
-                            
-                            # Upsert MlMetricsDaily (Partial Update - Only Visits)
-                            metric_rec = self.db.query(MlMetricsDaily).filter(MlMetricsDaily.item_id == ad.id, MlMetricsDaily.date == v_date).first()
-                            if not metric_rec:
-                                metric_rec = MlMetricsDaily(item_id=ad.id, date=v_date)
-                                self.db.add(metric_rec)
-                            metric_rec.visits = v_count
-                            
-                        # Update Ad's visits_30d snapshot
-                        total_visits_30d = sum(d.get('visits', 0) for d in data['results'])
-                        ad.visits_30d = total_visits_30d
-                        ad.visits_last_updated = datetime.datetime.now()
-                        
-                        success += 1
-                        
+            self.meli_service.get_headers() 
+            ad_map = {ad.id: ad for ad in ads}
+            ad_ids = list(ad_map.keys())
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_id = {executor.submit(self._fetch_visits_wrapper, aid): aid for aid in ad_ids}
+                
+                for future in concurrent.futures.as_completed(future_to_id):
+                    aid = future_to_id[future]
+                    ad = ad_map[aid]
                     processed += 1
+                    
+                    try:
+                        data = future.result()
+                        if data and "results" in data:
+                            for day_data in data["results"]:
+                                v_date_str = day_data.get("date")[:10] 
+                                v_count = day_data.get("visits", 0)
+                                v_date = datetime.datetime.strptime(v_date_str, "%Y-%m-%d").date()
+                                
+                                visit_rec = self.db.query(MlVisit).filter(MlVisit.item_id == aid, MlVisit.date == v_date).first()
+                                if not visit_rec:
+                                    visit_rec = MlVisit(item_id=aid, date=v_date)
+                                    self.db.add(visit_rec)
+                                visit_rec.visits = day_data.get("total", 0)
+                                
+                                metric_rec = self.db.query(MlMetricsDaily).filter(MlMetricsDaily.item_id == aid, MlMetricsDaily.date == v_date).first()
+                                if not metric_rec:
+                                    metric_rec = MlMetricsDaily(item_id=aid, date=v_date)
+                                    self.db.add(metric_rec)
+                                metric_rec.visits = day_data.get("total", 0)
+                                
+                            total_visits_30d = sum(d.get('total', 0) for d in data['results'])
+                            ad.visits_30d = total_visits_30d
+                            ad.visits_last_updated = datetime.datetime.now()
+                            success += 1
+                        else:
+                            if data is None: error += 1
+                    except Exception as e_process:
+                        logger.error(f"Processing result failed for {aid}: {e_process}")
+                        error += 1
                     if processed % 50 == 0:
                         self.db.commit()
-                        
-                except Exception as e_item:
-                    logger.error(f"Visits Error {ad.id}: {e_item}")
-                    error += 1
             
             self.db.commit()
             self._log_sync("visits", "success", processed, success, error, start_time=start_time)
@@ -278,44 +300,20 @@ class SyncEngine:
             logger.error(f"Visits Sync Failed: {e}")
             self._log_sync("visits", "error", processed, success, error, str(e), start_time=start_time)
 
-
     def sync_orders(self):
-        """Syncs recent orders, populates ml_orders, and metrics."""
-        logger.info("Starting Orders Sync...")
-        start_time = datetime.datetime.now()
-        processed = 0
-        success = 0
-        error = 0
+        """
+        [DEPRECATED Logic] Now redirects to V2 Incremental Sync.
+        Syncs recent orders, populates ml_orders, and metrics.
+        """
+        logger.info("Starting Orders Sync (Redirecting to V2 Incremental with 48h lookback)...")
+        # For legacy 'Sync All' button reliability, we force 48h lookback
+        self.sync_orders_incremental(lookback_hours=48)
         
-        try:
-            seller_id = self.get_seller_id()
-             # Date Range: Last 30 days (or just recent if high frequency)
-            date_to = datetime.datetime.now()
-            date_from = date_to - datetime.timedelta(days=30)
-            date_to_iso = date_to.replace(microsecond=0).isoformat() + "Z"
-            date_from_iso = date_from.replace(microsecond=0).isoformat() + "Z"
-
-            orders = self.meli_service.get_orders(seller_id, date_from=date_from_iso, date_to=date_to_iso)
-            total = len(orders)
-            logger.info(f"Found {total} orders.")
-
-            for order_data in orders:
-                processed += 1
-                try:
-                    self._process_order_full(order_data)
-                    success += 1
-                except Exception as e_ord:
-                    logger.error(f"Order Error {order_data.get('id')}: {e_ord}")
-                    error += 1
-            
-            self.db.commit()
-            self._log_sync("orders", "success", processed, success, error, start_time=start_time)
-            
-        except Exception as e:
-            self.db.rollback()
-            logger.error(f"Orders Sync Failed: {e}")
-            self._log_sync("orders", "error", processed, success, error, str(e), start_time=start_time)
-
+        # Update Metrics Processing Trigger
+        # Currently done in run_daily_sync or sync_metrics wrapper. 
+        # But sync_orders is called BY sync_metrics usually.
+        # So we just do the sync here. The processing happens in sync_metrics step 3.
+        pass
     def _process_order_full(self, order_data: dict):
         ml_order_id = str(order_data["id"])
         
@@ -327,11 +325,26 @@ class SyncEngine:
         
         order.seller_id = str(order_data.get("seller", {}).get("id"))
         order.status = order_data.get("status")
-        order.date_created = datetime.datetime.fromisoformat(order_data["date_created"].replace("Z", "+00:00"))
+        
+        # Date Parsing with UTC Conversion
+        dt_str = order_data["date_created"]
+        if dt_str.endswith('Z'):
+             dt_str = dt_str.replace('Z', '+00:00')
+        dt_obj = datetime.datetime.fromisoformat(dt_str)
+        if dt_obj.tzinfo:
+             dt_obj = dt_obj.astimezone(datetime.timezone.utc)
+        order.date_created = dt_obj.replace(tzinfo=None)
+        
         order.total_amount = float(order_data.get("total_amount", 0))
         order.currency_id = order_data.get("currency_id")
         order.buyer_id = str(order_data.get("buyer", {}).get("id"))
         
+        # Tags Mapping
+        tags_list = order_data.get("tags", [])
+        import json
+        order.tags = json.dumps(tags_list) 
+        order.status_detail = str(order_data.get("status_detail"))
+
         shipping = order_data.get("shipping", {})
         order.shipping_id = str(shipping.get("id")) if shipping.get("id") else None
         # Shipping Cost logic (To be refined)
@@ -377,6 +390,9 @@ class SyncEngine:
         """Syncs stock from Tiny for all linked products."""
         logger.info("Starting Tiny Stock Sync...")
         start_time = datetime.datetime.now()
+        
+        self._log_sync("stock", "running", start_time=start_time)
+
         processed = 0
         success = 0
         error = 0
@@ -541,15 +557,30 @@ class SyncEngine:
     def sync_metrics(self):
         """
         Runs the processing: 
-        1. Process Trends (MetricProcessor).
-        2. Recalculate Margins (MarginCalculator).
+        1. Sync Visits from ML.
+        2. Sync Orders from ML.
+        3. Process Trends & Aggregations (MetricProcessor).
+        4. Recalculate Margins (MarginCalculator).
         """
         logger.info("Starting Metrics & Margin Processing...")
         try:
-            # 1. Process Metrics (Trends, days of stock)
+            # 1. Sync Visits
+            self._log_sync("visits", "running", start_time=datetime.datetime.now())
+            self.sync_visits()
+
+            # 2. Sync Orders
+            self._log_sync("orders", "running", start_time=datetime.datetime.now())
+            self.sync_orders()
+
+            # 3. Process Trends & Aggregations
+            self._log_sync("metrics_processing", "running", start_time=datetime.datetime.now())
+            
+            # Aggregate Sales First (Orders -> Ads)
+            self.metric_processor.aggregate_sales_metrics()
+            # Calculate Trends (7d changes)
             self.metric_processor.process_all()
             
-            # 2. Process Margins
+            # 4. Process Margins
             seller_id = self.get_seller_id()
             ads = self.db.query(Ad).filter(Ad.status == 'active').all()
             
@@ -573,10 +604,12 @@ class SyncEngine:
             self.db.commit()
             logger.info("Metrics & Margin Processing completed.")
             
+            self._log_sync("metrics_processing", "success", start_time=datetime.datetime.now()) # End log
+            
         except Exception as e:
             self.db.rollback()
             logger.error(f"Metrics Processing failed: {e}")
+            self._log_sync("metrics_processing", "error", msg=str(e), start_time=datetime.datetime.now())
 
     def sync_ads_spend(self):
         pass
-

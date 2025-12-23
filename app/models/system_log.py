@@ -13,3 +13,4 @@ class SystemLog(Base):
     message = Column(Text)
     details = Column(Text, nullable=True) # JSON or stacktrace
     duration_ms = Column(Integer, nullable=True)
+    status = Column(String(20), nullable=True) # 'running', 'success', 'error'

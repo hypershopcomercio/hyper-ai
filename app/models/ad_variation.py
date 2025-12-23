@@ -18,6 +18,8 @@ class AdVariation(Base):
     
     # Details
     attribute_combination = Column(String, nullable=True) # e.g. "Cor: Vermelho, Tamanho: G"
+    picture_ids = Column(JSON)
+    seller_custom_field = Column(String)
     
     # Relationships
     # ad = relationship("Ad", back_populates="variations")
