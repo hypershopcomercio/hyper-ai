@@ -1,14 +1,20 @@
-
 import requests
+import json
 
 try:
-    res = requests.get("http://localhost:5000/api/ads?limit=2")
-    print("Status:", res.status_code)
-    data = res.json()
-    print("Keys:", data.keys())
-    print("Data Type:", type(data.get('data')))
-    print("Data Length:", len(data.get('data', [])))
-    if len(data.get('data', [])) > 0:
-        print("First Item sample:", str(data['data'][0])[:100])
+    print("Calling /api/debug/orders-test...")
+    response = requests.get("http://localhost:5000/api/debug/orders-test")
+    data = response.json()
+    debug_info = data.get("debug_info", {})
+    pareto_debug = debug_info.get("pareto_debug", {})
+    
+    print("\n--- KEYS ---")
+    print(list(data.keys()))
+    if "error" in data:
+         print(f"\nAPI ERROR: {data['error']}")
+    
+    print("\n--- RESPONSE DATA ---")
+    print(json.dumps(data, indent=2))
+    
 except Exception as e:
-    print("Error:", e)
+    print(e)

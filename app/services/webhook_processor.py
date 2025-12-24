@@ -99,6 +99,12 @@ class WebhookProcessor:
             except Exception as sse_err:
                 logger.warning(f"[WEBHOOK_PROCESSOR] SSE broadcast failed: {sse_err}")
             
+            # Sync visits to update real-time metrics (visits, conversion)
+            try:
+                self._sync_visits_for_update()
+            except Exception as visits_err:
+                logger.warning(f"[WEBHOOK_PROCESSOR] Visits sync failed: {visits_err}")
+            
             # Notify internal subscribers (legacy)
             self._notify_subscribers({
                 'type': 'webhook_processed',
@@ -206,6 +212,79 @@ class WebhookProcessor:
         """Remove an SSE subscriber."""
         if callback in self.subscribers:
             self.subscribers.remove(callback)
+    
+    def _sync_visits_for_update(self):
+        """
+        Sync visits data from ML API to update real-time metrics.
+        This ensures visits and conversion rates are updated when webhooks arrive.
+        """
+        from datetime import date, timedelta
+        from app.models.ml_metrics_daily import MlMetricsDaily
+        from app.models.ad import Ad
+        import os
+        
+        logger.info("[WEBHOOK_PROCESSOR] Syncing visits for real-time update...")
+        
+        db = self.db_session_factory()
+        meli = self.meli_service_factory(db)
+        
+        try:
+            user_id = os.getenv('MELI_USER_ID')
+            if not user_id:
+                logger.warning("[WEBHOOK_PROCESSOR] MELI_USER_ID not set")
+                return
+            
+            # Get items to sync visits for (active items only, limit for performance)
+            items = db.query(Ad).filter(Ad.status == 'active').limit(20).all()
+            
+            today = date.today()
+            yesterday = today - timedelta(days=1)
+            
+            for item in items:
+                try:
+                    # Fetch visits from ML API
+                    visits_data = meli.request(
+                        'GET', 
+                        f'/items/{item.id}/visits/time_window',
+                        params={'last': 7, 'unit': 'day'}
+                    )
+                    
+                    if visits_data and isinstance(visits_data, list):
+                        for visit_entry in visits_data:
+                            visit_date = visit_entry.get('date')
+                            if visit_date:
+                                visit_date_obj = date.fromisoformat(visit_date[:10])
+                                total_visits = visit_entry.get('total', 0)
+                                
+                                # Upsert to ml_metrics_daily
+                                existing = db.query(MlMetricsDaily).filter(
+                                    MlMetricsDaily.item_id == item.id,
+                                    MlMetricsDaily.date == visit_date_obj
+                                ).first()
+                                
+                                if existing:
+                                    existing.visits = total_visits
+                                else:
+                                    new_metric = MlMetricsDaily(
+                                        item_id=item.id,
+                                        date=visit_date_obj,
+                                        visits=total_visits,
+                                        sales_qty=0
+                                    )
+                                    db.add(new_metric)
+                    
+                except Exception as item_err:
+                    logger.debug(f"[WEBHOOK_PROCESSOR] Visits sync error for {item.id}: {item_err}")
+                    continue
+            
+            db.commit()
+            logger.info("[WEBHOOK_PROCESSOR] Visits sync completed")
+            
+        except Exception as e:
+            logger.error(f"[WEBHOOK_PROCESSOR] Visits sync error: {e}")
+            db.rollback()
+        finally:
+            db.close()
     
     def get_status(self):
         """Get processor status."""
