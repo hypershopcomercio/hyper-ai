@@ -444,24 +444,41 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
         # Fill hours (only show hours, no dates for Hoje/Ontem)
         for h in range(0, 24, 2):
             key = f"{h:02}h"
-            chart_data[key] = {"name": key, "receita": 0.0, "custo": 0.0, "lucro": 0.0}
+            chart_data[key] = {
+                "name": key, 
+                "receita": 0.0, "custo": 0.0, "lucro": 0.0,
+                "receita_anterior": 0.0, "receita_projetada": None
+            }
     else:
         # Daily buckets
         while curr <= end_date:
             key = curr.strftime("%d/%m")
-            chart_data[key] = {"name": key, "receita": 0.0, "custo": 0.0, "lucro": 0.0}
+            chart_data[key] = {
+                "name": key, 
+                "receita": 0.0, "custo": 0.0, "lucro": 0.0,
+                "receita_anterior": 0.0, "receita_projetada": None
+            }
             curr += timedelta(days=1)
             
-    # Fetch Orders (Paid only for revenue?)
-    # Usually Cash Flow includes everything happening? 
-    # Use same time window
+    # --- Fetch Current Date Range Orders ---
     start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=tz_obj).astimezone(timezone.utc).replace(tzinfo=None)
     end_dt = datetime.combine(end_date, datetime.max.time(), tzinfo=tz_obj).astimezone(timezone.utc).replace(tzinfo=None)
     
     orders = db.query(MlOrder).filter(MlOrder.date_created >= start_dt, MlOrder.date_created <= end_dt).all()
     
+    current_total_so_far = 0.0
+    
+    # Identify current time bucket to know "until when" to sum for projection ratio
+    now_local = datetime.now(tz_obj)
+    current_bucket_idx = -1
+    
+    if is_hourly and start_date == date.today():
+        current_bucket_val = (now_local.hour // 2) * 2
+    else:
+        current_bucket_val = 999 # Past days, everything is "so far"
+        
     for o in orders:
-        if o.status == 'cancelled': continue # Ignore cancelled in cash flow for now
+        if o.status == 'cancelled': continue
         
         # Localize
         dt_local = o.date_created.replace(tzinfo=timezone.utc).astimezone(tz_obj)
@@ -469,14 +486,74 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
         if is_hourly:
             h = (dt_local.hour // 2) * 2
             key = f"{h:02}h"
+            if is_hourly and start_date == date.today() and h <= current_bucket_val:
+                 current_total_so_far += float(o.total_amount or 0)
         else:
             key = dt_local.strftime("%d/%m")
             
         if key in chart_data:
             chart_data[key]["receita"] += float(o.total_amount or 0)
-            # Costs placeholder
-            chart_data[key]["custo"] += 0.0
+            chart_data[key]["custo"] += 0.0 # Placeholder
             chart_data[key]["lucro"] = chart_data[key]["receita"] - chart_data[key]["custo"]
+
+    # --- Fetch Previous Period Orders (Comparison) ---
+    # Calculate previous period
+    period_delta = end_date - start_date
+    if period_delta.days == 0: # 1 day (Hoje/Ontem)
+        prev_start = start_date - timedelta(days=1)
+        prev_end = end_date - timedelta(days=1)
+    else:
+        # Previous range (e.g. prev 7 days)
+        prev_end = start_date - timedelta(days=1)
+        prev_start = prev_end - period_delta
+        
+    prev_start_dt = datetime.combine(prev_start, datetime.min.time(), tzinfo=tz_obj).astimezone(timezone.utc).replace(tzinfo=None)
+    prev_end_dt = datetime.combine(prev_end, datetime.max.time(), tzinfo=tz_obj).astimezone(timezone.utc).replace(tzinfo=None)
+    
+    prev_orders = db.query(MlOrder).filter(MlOrder.date_created >= prev_start_dt, MlOrder.date_created <= prev_end_dt).all()
+    
+    prev_total_so_far = 0.0
+    
+    for o in prev_orders:
+        if o.status == 'cancelled': continue
+        
+        dt_local = o.date_created.replace(tzinfo=timezone.utc).astimezone(tz_obj)
+        
+        # Map previous date to matched chart key
+        if is_hourly:
+            # Same hour, ignore date difference
+            h = (dt_local.hour // 2) * 2
+            key = f"{h:02}h"
+            if is_hourly and start_date == date.today() and h <= current_bucket_val:
+                prev_total_so_far += float(o.total_amount or 0)
+        else:
+            # Map date relative to start
+            days_diff = (dt_local.date() - prev_start).days
+            target_date = start_date + timedelta(days=days_diff)
+            key = target_date.strftime("%d/%m")
+            
+        if key in chart_data:
+            chart_data[key]["receita_anterior"] += float(o.total_amount or 0)
+
+    # --- Calculate Projection (Ghost Line) ---
+    # Only for "Hoje" view
+    if is_hourly and start_date == date.today():
+        # Avoid division by zero
+        if prev_total_so_far > 0:
+            growth_factor = current_total_so_far / prev_total_so_far
+            # Cap extreme factors to avoid absurd projections (e.g. 10x)
+            growth_factor = min(max(growth_factor, 0.2), 3.0)
+        else:
+            growth_factor = 1.0 # Fallback
+            
+        for h in range(0, 24, 2):
+            key = f"{h:02}h"
+            if h <= current_bucket_val:
+                 # Past/Current: Projection follows actual
+                 chart_data[key]["receita_projetada"] = chart_data[key]["receita"]
+            else:
+                 # Future: Projection = Previous * Factor
+                 chart_data[key]["receita_projetada"] = chart_data[key]["receita_anterior"] * growth_factor
 
     return list(chart_data.values())
 
