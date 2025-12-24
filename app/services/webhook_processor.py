@@ -142,7 +142,7 @@ class WebhookProcessor:
                 # Upsert order using existing sync logic
                 from app.services.sync_engine import SyncEngine
                 engine = SyncEngine()  # Creates its own DB session
-                engine._upsert_order(order_data)
+                engine._process_order_full(order_data)
                 engine.db.commit()
                 engine.db.close()
                 logger.info(f"[WEBHOOK_PROCESSOR] Order {order_id} synced successfully")
