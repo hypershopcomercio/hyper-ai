@@ -250,3 +250,26 @@ def trigger_sync_manual():
     thread = Thread(target=run_daily_sync)
     thread.start()
     return jsonify({"message": "Sync job triggered in background"}), 202
+
+
+@api_bp.route('/jobs/trigger', methods=['POST'])
+def trigger_quick_sync():
+    """Quick sync - fetches recent orders and visits without full ad sync."""
+    from threading import Thread
+    
+    def quick_sync_task():
+        try:
+            engine = SyncEngine()
+            # Sync recent orders (last 2 hours)
+            engine.sync_orders_incremental(lookback_hours=2)
+            # Sync visits
+            engine.sync_visits()
+            engine.db.close()
+        except Exception as e:
+            import logging
+            logging.error(f"Quick sync error: {e}")
+    
+    thread = Thread(target=quick_sync_task)
+    thread.start()
+    return jsonify({"message": "Quick sync triggered"}), 202
+
