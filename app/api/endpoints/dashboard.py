@@ -478,7 +478,16 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
             chart_data[key]["custo"] += 0.0
             chart_data[key]["lucro"] = chart_data[key]["receita"] - chart_data[key]["custo"]
 
-    return list(chart_data.values())
+    result = list(chart_data.values())
+    
+    # For TODAY only: cut chart at current hour to show "open" day
+    if is_hourly and start_date == end_date == date.today():
+        now = datetime.now(tz_obj)
+        current_bucket_hour = (now.hour // 2) * 2
+        # Keep only hours up to and including current bucket
+        result = [d for d in result if int(d["name"].replace("h", "")) <= current_bucket_hour]
+    
+    return result
 
 def get_conversion_distribution(db, start_date_local, start_dt_utc, end_date_local=None, current_visits=0, current_sales=0):
     """
