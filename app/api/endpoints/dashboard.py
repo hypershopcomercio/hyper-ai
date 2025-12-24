@@ -441,14 +441,10 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
     chart_data = {}
     curr = start_date
     if is_hourly:
-        # Fill hours for each day in range (usually 1 or 2 days)
-        while curr <= end_date:
-            for h in range(0, 24, 2):
-                key = f"{h:02}h" 
-                if start_date != end_date:
-                    key = f"{curr.day}/{curr.month} {h:02}h"
-                chart_data[key] = {"name": key, "receita": 0.0, "custo": 0.0, "lucro": 0.0}
-            curr += timedelta(days=1)
+        # Fill hours (only show hours, no dates for Hoje/Ontem)
+        for h in range(0, 24, 2):
+            key = f"{h:02}h"
+            chart_data[key] = {"name": key, "receita": 0.0, "custo": 0.0, "lucro": 0.0}
     else:
         # Daily buckets
         while curr <= end_date:
@@ -473,8 +469,6 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
         if is_hourly:
             h = (dt_local.hour // 2) * 2
             key = f"{h:02}h"
-            if start_date != end_date:
-                key = f"{dt_local.day}/{dt_local.month} {h:02}h"
         else:
             key = dt_local.strftime("%d/%m")
             
@@ -559,12 +553,25 @@ def get_conversion_distribution(db, start_date_local, start_dt_utc, end_date_loc
                 "conversion_rate": round(conv_rate, 2)
             })
     
-    # Distribution by conversion quality
+    # Distribution by conversion quality - query ALL ads with visits
+    all_ads_query = db.query(
+        MlMetricsDaily.item_id,
+        func.sum(MlMetricsDaily.visits).label('total_visits'),
+        func.sum(MlMetricsDaily.sales_qty).label('total_sales')
+    ).filter(
+        MlMetricsDaily.date >= start_date_local,
+        MlMetricsDaily.date <= (end_date_local if end_date_local else start_date_local + timedelta(days=period_days))
+    ).group_by(
+        MlMetricsDaily.item_id
+    ).having(
+        func.sum(MlMetricsDaily.visits) > 0  # Any visits
+    ).all()
+    
     bons = 0  # > 3%
     medio = 0  # 1-3%
     ruim = 0  # < 1%
     
-    for ad in top_ads_query:
+    for ad in all_ads_query:
         if ad.total_visits > 0:
             rate = (ad.total_sales / ad.total_visits) * 100
             if rate > 3:
