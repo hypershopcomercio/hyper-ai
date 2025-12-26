@@ -13,6 +13,7 @@ from app.models.ad_tiny_link import AdTinyLink
 from app.models.system_log import SystemLog
 from app.models.alert import Alert
 from app.models.system_config import SystemConfig
+from app.models.forecast_learning import ForecastLog, CalibrationHistory, MultiplierConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

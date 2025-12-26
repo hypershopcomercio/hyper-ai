@@ -15,8 +15,9 @@ logger = logging.getLogger(__name__)
 BATCH_SIZE = 50
 
 class InitialLoadService:
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, meli_client=None):
         self.db = db
+        self.meli_client = meli_client
         self.ml_api = MeliApiService(db)
         
     def _get_seller_id(self):
@@ -172,6 +173,45 @@ class InitialLoadService:
         
         parsed = self._parse_order_data(data)
         
+        # Fetch Shipping Cost if we have a client (Sync V2 context)
+        # Note: self.meli_client is not standard in InitialLoadService, we need to pass it or check.
+        # But we can try to use a passed client or import it?
+        # Better: Since this is called by WebhookProcessor which HAS meli service, 
+        # we should pass it or allow it.
+        # For now, let's assume if it's critical we fetch it here.
+        
+        # HACK: Retrieve MeliApiService from app context or creating new one is heavy?
+        # If data came from Webhook, maybe it has shipping info? No, webhook payload is minimal or just ID.
+        # If we fetched the order FULL JSON, does it have shipment cost?
+        # Usually NO.
+        
+        shipping_id = parsed.get("shipping_id")
+        shipping_cost = 0.0
+        
+        # Check if we have Meli Service available. 
+        # If not, we might skip this for bulk load (performance) but do it for single syncs.
+        if hasattr(self, 'meli_client') and self.meli_client and shipping_id:
+            try:
+                shipment = self.meli_client.get_shipment(shipping_id)
+                if shipment:
+                    # Look for list_cost (what seller pays) or cost
+                    # Structure varies: "shipping_option": { "list_cost": ... }
+                    so = shipment.get("shipping_option", {})
+                    # If free shipping (seller pays), usually list_cost > 0.
+                    # Or check "base_cost".
+                    cost = float(so.get("list_cost", 0) or so.get("cost", 0))
+                    
+                    # Verify who pays? "shipping_mode"?
+                    # If "free_shipping" is true in shipment?
+                    # "free_shipping": True
+                    if shipment.get("free_shipping"):
+                         shipping_cost = cost
+            except Exception as e:
+                # logger.warning(f"Failed to fetch shipment {shipping_id}: {e}")
+                pass
+        
+        parsed["shipping_cost"] = shipping_cost
+
         status = 'updated'
         if not existing:
             existing = MlOrder(ml_order_id=order_id)
@@ -231,6 +271,17 @@ class InitialLoadService:
         buyer = d.get('buyer', {})
         shipping = d.get('shipping', {})
         
+        # Try to get shipping cost from order shipping object (sometimes 'cost' is there)
+        # If not, and we have a shipping_id, we might need to fetch the shipment.
+        # Check standard order "shipping" struct: { "id": ..., "status": ..., "date_created": ..., "receiver_address": ..., "shipping_option": { "cost": X, "list_cost": Y } }? 
+        # Actually usually it is JUST { "id": xxx }.
+        # If we are in deep sync (single order), we should fetch.
+        
+        shipping_cost = 0.0
+        # If we have passed `meli_api` to the service, use it.
+        # But this method Parse is pure? `self` has it?
+        # Let's check if we can insert logic here or in upsert.
+        
         return {
             "seller_id": str(d.get('seller', {}).get('id')),
             "status": d.get('status'),
@@ -244,6 +295,7 @@ class InitialLoadService:
             "buyer_last_name": buyer.get('last_name'),
             "shipping_id": str(shipping.get('id')),
             "shipping_status": shipping.get('status'),
+            "shipping_cost": 0.0, # Placeholder, will be updated in _upsert_order if needed
             "date_created": date_created,
             "date_closed": date_closed,
             "last_updated": last_updated,

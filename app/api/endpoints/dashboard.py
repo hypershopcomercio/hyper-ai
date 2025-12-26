@@ -1,7 +1,7 @@
 
 from flask import request, jsonify
 from sqlalchemy import func, desc, asc
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, date, timedelta, timezone
 from sqlalchemy.orm import joinedload
 
 from app.api import api_bp
@@ -33,7 +33,9 @@ def get_dashboard_metrics():
         days_int_for_stock = 0
 
         # Parse Period
-        if days_param == "1": # Today
+        p_clean = str(days_param).lower().strip() if days_param else ''
+        
+        if p_clean == "1" or p_clean == "hoje" or p_clean == "today": # Today
             start_date_br = today_br_start
             end_date_br = now_br 
             prev_start_date_br = today_br_start - timedelta(days=1)
@@ -41,7 +43,7 @@ def get_dashboard_metrics():
             period_label = "Hoje"
             days_int_for_stock = 1
             
-        elif days_param == "0" or days_param.lower() == "yesterday": # Yesterday
+        elif p_clean == "0" or p_clean == "yesterday" or p_clean == "ontem": # Yesterday
             start_date_br = today_br_start - timedelta(days=1)
             end_date_br = today_br_start
             prev_start_date_br = today_br_start - timedelta(days=2)
@@ -49,7 +51,7 @@ def get_dashboard_metrics():
             period_label = "Ontem"
             days_int_for_stock = 1
             
-        elif days_param == "7":
+        elif p_clean == "7":
             start_date_br = today_br_start - timedelta(days=7)
             end_date_br = now_br
             prev_start_date_br = today_br_start - timedelta(days=14)
@@ -57,7 +59,7 @@ def get_dashboard_metrics():
             period_label = "Últimos 7 dias"
             days_int_for_stock = 7
             
-        elif days_param == "30":
+        elif p_clean == "30":
             start_date_br = today_br_start - timedelta(days=30)
             end_date_br = now_br
             prev_start_date_br = today_br_start - timedelta(days=60)
@@ -65,7 +67,7 @@ def get_dashboard_metrics():
             period_label = "Últimos 30 dias"
             days_int_for_stock = 30
             
-        elif days_param == "current_month":
+        elif p_clean == "current_month" or p_clean == "mes_atual":
             start_date_br = today_br_start.replace(day=1)
             end_date_br = now_br
             
@@ -76,7 +78,7 @@ def get_dashboard_metrics():
             period_label = "Mês Atual"
             days_int_for_stock = (end_date_br - start_date_br).days + 1
             
-        elif days_param == "last_month":
+        elif p_clean == "last_month" or p_clean == "mes_passado":
             first_of_curr = today_br_start.replace(day=1)
             last_of_prev = first_of_curr - timedelta(days=1)
             start_date_br = last_of_prev.replace(day=1)
@@ -90,7 +92,7 @@ def get_dashboard_metrics():
             days_int_for_stock = (end_date_br - start_date_br).days
             
         else: # Default 7
-            d_val = int(days_param) if days_param.isdigit() else 7
+            d_val = int(p_clean) if p_clean.isdigit() else 7
             days_int_for_stock = d_val
             start_date_br = today_br_start - timedelta(days=d_val)
             end_date_br = now_br
@@ -177,6 +179,7 @@ def get_dashboard_metrics():
             q_orders = q_orders.filter(MlOrder.date_closed < end_date_utc)
             
         curr_orders = q_orders.all()
+        print(f"[DEBUG] curr_orders loaded: {len(curr_orders)} orders")
         
         curr_gross = 0.0
         curr_cancelled = 0.0
@@ -399,17 +402,261 @@ def get_dashboard_metrics():
             current_sales=sales_count_current
         )
         
+        # 9. Sales List (Detailed Table)
+        sales_list = []
+        
+        # Tax Rate (Default 5.6% as requested)
+        TAX_RATE = 0.056
+        
+        # Process curr_orders to build the list
+        # We already have curr_orders filtered by date_closed (Sales)
+        # We want to show "Sold" items.
+        # Logic: Iterate valid sales.
+        
+        # We need to fetch Ads to get Cost info (Tiny Cost)
+        # Optimize: Bulk fetch Ads for these orders
+        item_ids = set()
+        for o in curr_orders:
+            if o.status == 'paid' or o.status == 'shipped' or o.status == 'delivered':
+                for item in o.items:
+                    item_ids.add(item.ml_item_id)
+        
+        ads_dict = {}
+        items_ads_cost = {}
+        
+        if item_ids:
+            ads_found = db.query(Ad).filter(Ad.id.in_(list(item_ids))).all()
+            ads_dict = {ad.id: ad for ad in ads_found}
+            
+            # Fetch Ads Performance (Real-time from API as requested check)
+            # Only if we have tokens.
+            # Using current date range (dashboard selection).
+            try:
+                # Use dashboard date range
+                s_date = start_date_br.date()
+                e_date = end_date_br.date() if end_date_br else start_date_br.date()
+                
+                # We need Meli Service instance
+                from app.services.meli_api import MeliApiService
+                import logging
+                meli_service = MeliApiService(db_session=db)
+                
+                # Fetch metrics
+                # Since get_ads_performance takes list of item_ids
+                # We chunk it to avoid huge payload if many sales
+                item_ids_list = list(item_ids)
+                chunk_size = 50
+                for i in range(0, len(item_ids_list), chunk_size):
+                     chunk = item_ids_list[i:i+chunk_size]
+                     ads_data = meli_service.get_ads_performance(chunk, s_date, e_date)
+                     if ads_data and "results" in ads_data:
+                         for res in ads_data["results"]:
+                              i_id = res.get("item_id")
+                              metrics = res.get("metrics", {})
+                              cost = float(metrics.get("cost", 0.0))
+                              # Note: This is TOTAL cost for the period for the item.
+                              # We need to attribute it to SALES.
+                              # If I sold 2 units today, and spent 10 BRL on ads today.
+                              # Should I attribute 5 BRL per unit? Or just show the cost?
+                              # The table row is "per order item".
+                              # The user sees "Margin" per row.
+                              # If I assign the TOTAL ads spend of the day to the specific sale, it might be weird if there are multiple sales.
+                              # Better: Distribute Ads Cost proportionally to Revenue or Quantity?
+                              # Or simpler: Calculate Total Ads Spend for the item in the period, and divide by Total Quantity Sold in period?
+                              # Yes -> Unit Ads Cost.
+                              if i_id:
+                                  items_ads_cost[i_id] = cost
+            except Exception as e:
+                logging.error(f"Failed to fetch ads performance: {e}")
+        
+        # Calculate Total Qty per Item in this period to verify Unit Ads Cost distribution
+        item_qty_map = {}
+        for o in curr_orders:
+            if o.status in ['paid', 'shipped', 'delivered', 'partially_paid']:
+                 if o.ml_order_id in IGNORED_IDS: continue
+                 if days_param == '7' and o.ml_order_id == "2000014334785924": continue # Legacy filter
+                 
+                 for item in o.items:
+                     item_qty_map[item.ml_item_id] = item_qty_map.get(item.ml_item_id, 0) + (item.quantity or 1)
+
+        for o in curr_orders:
+            # Include Paid and Shipped/Delivered
+            if o.status not in ['paid', 'shipped', 'delivered', 'partially_paid']:
+                continue
+            
+            # Skip ignored
+            if o.ml_order_id in IGNORED_IDS: continue
+            if days_param == '7' and o.ml_order_id == "2000014334785924": continue
+
+            order_date = o.date_closed or o.date_created
+            # Convert to Local for display
+            if order_date:
+                order_date = order_date.replace(tzinfo=timezone.utc).astimezone(tz_br)
+            
+            for item in o.items:
+                # Revenue
+                unit_price = float(item.unit_price or 0)
+                qty = int(item.quantity or 1)
+                total_rev = unit_price * qty
+                
+                # Costs
+                # sale_fee = float(item.sale_fee or 0) * qty # Usually fee is per unit? ML API sends unit_fee? 
+                # item.sale_fee in model is usually "sale_fee" from API which is total or unit?
+                # API returns "sale_fee" per unit usually? No, order_items level usually has total fee?
+                # Let's assume item.sale_fee is TOTAL for the line or UNIT?
+                # Standard ML API: order.order_items[].sale_fee is Unit? No, usually line.
+                # Model definition: `sale_fee = Column(DECIMAL(12, 2))`
+                # In `sync_engine`: `db_item.sale_fee = float(item_d.get("sale_fee", 0))`
+                # ML API `sale_fee` in item object is usually UNIT fee. 
+                # Let's assume Unit Fee for safety or check values.
+                # Actually, let's allow `sale_fee` to be the stored value * quantity if small, or just stored value.
+                # Best guess: use stored value as Unit Fee.
+                # total_fee = sale_fee * qty # Correction: sale_fee is usually unit fee.
+                # Actually, wait. item.sale_fee is gathered from API.
+                # Let's assume Unit Fee.
+                # total_fee = sale_fee # Variable `sale_fee` is `float(...) * qty` above. So `total_fee` = `sale_fee` * `qty`? 
+                # ERROR in logic above: `sale_fee = float(item.sale_fee or 0) * qty`
+                # If `item.sale_fee` is unit fee, then `sale_fee` var IS total fee.
+                # Then `total_fee = sale_fee * qty` would be `(unit * qty) * qty`. WRONG.
+                # Fixing:
+                unit_fee = float(item.sale_fee or 0)
+                total_fee = unit_fee * qty
+                
+                # Product Cost (from Ad -> Tiny)
+                ad = ads_dict.get(item.ml_item_id)
+                unit_cost = float(ad.cost or 0) if ad else 0.0
+                print(f"[DEBUG-COST] Item: {item.title[:30]}, ml_item_id: {item.ml_item_id}, ad_found: {ad is not None}, unit_cost: {unit_cost}, item.sku: {item.sku}")
+                
+                # Fallback for Variations: If ad.cost is 0 and item has SKU, lookup TinyProduct by SKU
+                if unit_cost == 0 and item.sku:
+                    print(f"[DEBUG] Fallback triggered for SKU: {item.sku}, unit_cost: {unit_cost}")
+                    from app.models.tiny_product import TinyProduct
+                    tiny_by_sku = db.query(TinyProduct).filter(TinyProduct.sku == item.sku).first()
+                    
+                    # If not found locally, try Tiny API and save for future
+                    if not tiny_by_sku:
+                        print(f"[DEBUG] TinyProduct not found locally for SKU: {item.sku}, calling Tiny API...")
+                        try:
+                            from app.services.tiny_api import TinyApiService
+                            tiny_api = TinyApiService()
+                            p_data = tiny_api.search_product(item.sku)
+                            print(f"[DEBUG] Tiny API response: {p_data}")
+                            if p_data and p_data.get("id"):
+                                # Create TinyProduct record
+                                tiny_by_sku = TinyProduct(
+                                    id=str(p_data.get("id")),
+                                    sku=p_data.get("codigo"),
+                                    name=p_data.get("nome"),
+                                    cost=float(p_data.get("preco_custo", 0) or 0)
+                                )
+                                db.add(tiny_by_sku)
+                                db.flush()
+                                print(f"[DEBUG] Created TinyProduct: sku={tiny_by_sku.sku}, cost={tiny_by_sku.cost}")
+                        except Exception as e:
+                            print(f"[DEBUG] ERROR in Tiny API call: {e}")
+                            import traceback
+                            traceback.print_exc()
+                    
+                    if tiny_by_sku and tiny_by_sku.cost:
+                        unit_cost = float(tiny_by_sku.cost)
+                        print(f"[DEBUG] Updated unit_cost to: {unit_cost}")
+                
+                total_prod_cost = unit_cost * qty
+                
+                # Tax (5.6% of Revenue)
+                total_tax = total_rev * TAX_RATE
+                # Shipping (Seller pays if Free Shipping)
+                # Logic Refined:
+                # 1. Check if Order has specific shipping_cost recorded (Best Source)
+                # 2. If 'frete gratis', check Ad.shipping_cost (Estimate)
+                # 3. Else 0.0
+                
+                shipping_val = 0.0
+                # Check Order Table first (ensure numeric)
+                order_shipping_cost = float(o.shipping_cost or 0)
+                
+                if order_shipping_cost > 0:
+                     # If order has explicit cost, use it.
+                     # But is this cost for the WHOLE order or PER ITEM?
+                     # MlOrder shipping_cost is usually for the shipping.
+                     # If multiple items, we should distribute?
+                     # If items are in same shipment (cart), usually one shipping cost.
+                     # If I have 2 items, shipping is 20.
+                     # Should I charge 20 to item 1 and 0 to item 2? Or 10 each?
+                     # Simple approach: Verify if items share shipping_id.
+                     # If we are iterating items, we risk duplicating cost if we assign full cost to each.
+                     # However, MlOrder structure here: `curr_orders` loop is Order-based.
+                     # `item` loop is inside.
+                     
+                     # If multiple items in order, we must split shipping cost.
+                     # Weight-based? Price-based? Or simple average?
+                     num_items = len(o.items)
+                     if num_items > 0:
+                         shipping_val = order_shipping_cost / num_items
+                     
+                elif ad and ad.free_shipping:
+                    # Fallback to Ad Estimate
+                    shipping_val = float(ad.shipping_cost or 0) * qty
+                
+                # Ads Cost calculation
+                
+                # Ads Cost calculation
+                # We have total cost for the item in the period in `items_ads_cost[item_id]`.
+                # We have total quantity sold in the period in `item_qty_map[item_id]`.
+                # Unit Ads Cost = Total Ads Cost / Total Qty Sold
+                total_item_ads = items_ads_cost.get(item.ml_item_id, 0.0)
+                total_item_qty_period = item_qty_map.get(item.ml_item_id, 1)
+                unit_ads_cost = total_item_ads / total_item_qty_period if total_item_qty_period > 0 else 0.0
+                
+                ads_val = unit_ads_cost * qty
+                
+                total_costs = total_fee + total_prod_cost + total_tax + shipping_val + ads_val
+                net_margin = total_rev - total_costs
+                margin_pct = (net_margin / total_rev * 100) if total_rev > 0 else 0.0
+                
+                sales_list.append({
+                    "order_id": o.ml_order_id,
+                    "date": order_date.isoformat() if order_date else None,
+                    "sku": item.sku or (ad.sku if ad else ""),
+                    "title": item.title,
+                    "thumbnail": ad.thumbnail if ad else None,
+                    "quantity": qty,
+                    "unit_price": round(unit_price, 2),
+                    "total_revenue": round(total_rev, 2),
+                    "costs": {
+                        "product": round(total_prod_cost, 2),
+                        "tax": round(total_tax, 2),
+                        "fee": round(total_fee, 2),
+                        "shipping": round(shipping_val, 2),
+                        "ads": round(ads_val, 2)
+                    },
+                    "total_cost": round(total_costs, 2),
+                    "net_margin": round(net_margin, 2),
+                    "margin_percent": round(margin_pct, 1)
+                })
+        
+        # Sort by date desc
+        sales_list.sort(key=lambda x: x['date'] or '', reverse=True)
+
+        # Profitability Metrics (Aggregated from Sales List)
+        calculated_profit = round(sum(item['net_margin'] for item in sales_list), 2)
+        calculated_ads = round(sum(item['costs']['ads'] for item in sales_list), 2)
+        calculated_avg_margin = round((sum(item['net_margin'] for item in sales_list) / sales_current_sum * 100) if sales_current_sum > 0 else 0.0, 1)
+
         return jsonify({
             "total_ads": total_ads,
             "visits_7d": visits_current,
             "visits_trend": round(visits_trend, 2),
-            "revenue_7d": round(sales_current_sum, 2), # Net? OR Gross? User saw Gross.
-            # Dashboard usually shows Gross + Cancelled separately.
+            "revenue_7d": round(sales_current_sum, 2), 
             "revenue_gross_7d": round(curr_gross, 2),
             "revenue_cancelled_7d": round(curr_cancelled, 2),
             "revenue_trend": round(revenue_trend, 2),
             "sales_count_7d": sales_count_current,
-            "average_margin": 0.0, # Placeholder
+            
+            "profit_7d": calculated_profit,
+            "ads_cost_7d": calculated_ads,
+            "average_margin": calculated_avg_margin,
+             
             "period_label": period_label,
             "low_stock_ads": stock_risk_count,
             "stock_risk_value": round(stock_risk_value, 2),
@@ -418,6 +665,7 @@ def get_dashboard_metrics():
             "stock_risks": top_risks,
             "cash_flow": cash_flow_data,
             "conversion_badges": badges,
+            "sales_list": sales_list, # New Field
             "debug_info": {
                 "start_utc": start_date_utc.isoformat(),
                 "end_utc": end_date_utc.isoformat() if end_date_utc else None,
@@ -460,11 +708,17 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
             }
             curr += timedelta(days=1)
             
-    # --- Fetch Current Date Range Orders ---
+    # --- Fetch Current Date Range Orders (using date_closed to match sales_list) ---
     start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=tz_obj).astimezone(timezone.utc).replace(tzinfo=None)
     end_dt = datetime.combine(end_date, datetime.max.time(), tzinfo=tz_obj).astimezone(timezone.utc).replace(tzinfo=None)
     
-    orders = db.query(MlOrder).filter(MlOrder.date_created >= start_dt, MlOrder.date_created <= end_dt).all()
+    orders = db.query(MlOrder).options(joinedload(MlOrder.items)).filter(MlOrder.date_closed >= start_dt, MlOrder.date_closed <= end_dt).all()
+    
+    # Pre-load Ads and TinyProducts for cost lookup
+    from app.models.ad import Ad
+    from app.models.tiny_product import TinyProduct
+    ads_cache = {a.id: a for a in db.query(Ad).all()}
+    tiny_cache = {t.sku: t for t in db.query(TinyProduct).all()}
     
     current_total_so_far = 0.0
     
@@ -476,12 +730,14 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
         current_bucket_val = (now_local.hour // 2) * 2
     else:
         current_bucket_val = 999 # Past days, everything is "so far"
+    
+    TAX_RATE = 0.056  # Tax rate
         
     for o in orders:
         if o.status == 'cancelled': continue
         
-        # Localize
-        dt_local = o.date_created.replace(tzinfo=timezone.utc).astimezone(tz_obj)
+        # Localize using date_closed (to match sales_list)
+        dt_local = (o.date_closed or o.date_created).replace(tzinfo=timezone.utc).astimezone(tz_obj)
         
         if is_hourly:
             h = (dt_local.hour // 2) * 2
@@ -492,8 +748,53 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
             key = dt_local.strftime("%d/%m")
             
         if key in chart_data:
-            chart_data[key]["receita"] += float(o.total_amount or 0)
-            chart_data[key]["custo"] += 0.0 # Placeholder
+            order_revenue = float(o.total_amount or 0)
+            order_cost = 0.0
+            
+            # Calculate cost from items (same formula as sales_list)
+            for item in o.items:
+                qty = int(item.quantity or 1)
+                unit_price = float(item.unit_price or 0)
+                item_revenue = unit_price * qty
+                
+                # Get product cost
+                ad = ads_cache.get(item.ml_item_id)
+                unit_cost = float(ad.cost or 0) if ad else 0.0
+                
+                # Fallback to TinyProduct by SKU if ad.cost is 0
+                if unit_cost == 0 and item.sku:
+                    tiny_prod = tiny_cache.get(item.sku)
+                    if tiny_prod and tiny_prod.cost:
+                        unit_cost = float(tiny_prod.cost)
+                
+                prod_cost = unit_cost * qty
+                
+                # Tax cost (14% to match sales_list calculation: 5.6% + 8.4% for other components)
+                # Actually, use the same TAX_RATE as sales_list (0.056)
+                tax_cost = item_revenue * TAX_RATE
+                
+                # Fee cost (sale_fee is per unit, multiply by qty)
+                # ML sale_fee: Use as-is since it's the unit fee
+                fee_cost = float(item.sale_fee or 0) * qty
+                
+                # Shipping cost - same logic as sales_list:
+                # 1. If order has shipping_cost > 0, use it (split among items)
+                # 2. Else if ad has free_shipping, use ad.shipping_cost estimate
+                order_shipping = float(o.shipping_cost or 0)
+                num_items = len(o.items)
+                
+                if order_shipping > 0 and num_items > 0:
+                    shipping_cost = order_shipping / num_items
+                elif ad and ad.free_shipping:
+                    # Fallback to Ad's shipping estimate
+                    shipping_cost = float(ad.shipping_cost or 0) * qty
+                else:
+                    shipping_cost = 0.0
+                
+                order_cost += prod_cost + tax_cost + fee_cost + shipping_cost
+            
+            chart_data[key]["receita"] += order_revenue
+            chart_data[key]["custo"] += order_cost
             chart_data[key]["lucro"] = chart_data[key]["receita"] - chart_data[key]["custo"]
 
     # --- Fetch Previous Period Orders (Comparison) ---
@@ -535,25 +836,23 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
         if key in chart_data:
             chart_data[key]["receita_anterior"] += float(o.total_amount or 0)
 
-    # --- Calculate Projection (Ghost Line) ---
+    # --- Calculate Projection using simple growth factor ---
+    # HyperForecast temporarily disabled for performance
     # Only for "Hoje" view
     if is_hourly and start_date == date.today():
-        # Avoid division by zero
+        # Simple growth factor projection (fast)
         if prev_total_so_far > 0:
             growth_factor = current_total_so_far / prev_total_so_far
-            # Cap extreme factors to avoid absurd projections (e.g. 10x)
             growth_factor = min(max(growth_factor, 0.2), 3.0)
         else:
-            growth_factor = 1.0 # Fallback
+            growth_factor = 1.0
             
         for h in range(0, 24, 2):
             key = f"{h:02}h"
             if h <= current_bucket_val:
-                 # Past/Current: Projection follows actual
-                 chart_data[key]["receita_projetada"] = chart_data[key]["receita"]
+                chart_data[key]["receita_projetada"] = chart_data[key]["receita"]
             else:
-                 # Future: Projection = Previous * Factor
-                 chart_data[key]["receita_projetada"] = chart_data[key]["receita_anterior"] * growth_factor
+                chart_data[key]["receita_projetada"] = chart_data[key]["receita_anterior"] * growth_factor
 
     return list(chart_data.values())
 

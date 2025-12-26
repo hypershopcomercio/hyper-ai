@@ -412,6 +412,8 @@ class SyncEngine:
                         continue
                         
                     sku = tiny_prod.sku
+                    
+                    # 1. Sync Stock
                     stock_data = self.tiny_service.get_stock(sku)
                     
                     if stock_data:
@@ -432,14 +434,35 @@ class SyncEngine:
                         if ad:
                             ad.stock_tiny = qty
                             ad.stock_divergence = ad.available_quantity - qty
-                            
-                        success += 1
+                    
+                    # 2. Sync Cost (Enhanced to fix stale cost issue)
+                    # We use the ID to fetching details which includes 'preco_custo'
+                    if tiny_prod.id:
+                        details = self.tiny_service.get_product_details(str(tiny_prod.id))
+                        if details:
+                             # Update Cost
+                             new_cost = float(details.get("preco_custo", 0.0))
+                             tiny_prod.cost = new_cost
+                             tiny_prod.name = details.get("nome", tiny_prod.name) # Update name too
+                             tiny_prod.last_updated = datetime.datetime.now()
+                             
+                             # Update Ad Cost immediately if linked
+                             ad = self.db.query(Ad).filter(Ad.id == link.ad_id).first()
+                             if ad:
+                                 ad.cost = new_cost
+                                 # ad.last_updated = datetime.datetime.now() # Don't update ad timestamp to avoid trigger loop?
+                                 
+                    success += 1
                 except Exception as e_stock:
-                    logger.error(f"Stock Sync failed for link {link.id}: {e_stock}")
+                    logger.error(f"Stock/Cost Sync failed for link {link.id}: {e_stock}")
                     error += 1
             
             self.db.commit()
             self._log_sync("stock", "success", processed, success, error, start_time=start_time)
+            
+            # Also sync variation costs from order items
+            logger.info("Triggering Variation Costs Sync after Stock Sync...")
+            self.sync_variation_costs()
             
         except Exception as e:
             self.db.rollback()
@@ -613,3 +636,72 @@ class SyncEngine:
 
     def sync_ads_spend(self):
         pass
+
+    def sync_variation_costs(self):
+        """
+        Sync costs for all unique SKUs from order items.
+        For each SKU not already in TinyProduct (or with cost=0), 
+        fetches from Tiny API and saves to database.
+        Called by sync_tiny_stock and general sync.
+        """
+        logger.info("Starting Variation Costs Sync...")
+        self._log_sync("variation_costs", "running", start_time=datetime.datetime.now())
+        
+        try:
+            from sqlalchemy import distinct
+            from app.models.ml_order import MlOrderItem
+            
+            # Get all unique SKUs from order items
+            all_skus = self.db.query(distinct(MlOrderItem.sku)).filter(MlOrderItem.sku != None).all()
+            all_skus = [sku[0] for sku in all_skus if sku[0]]
+            
+            logger.info(f"Found {len(all_skus)} unique SKUs in order items")
+            
+            synced = 0
+            skipped = 0
+            errors = 0
+            
+            for sku in all_skus:
+                # Check if already exists with cost
+                existing = self.db.query(TinyProduct).filter(TinyProduct.sku == sku).first()
+                if existing and existing.cost and existing.cost > 0:
+                    skipped += 1
+                    continue
+                
+                # Fetch from Tiny API
+                try:
+                    p_data = self.tiny_service.search_product(sku)
+                    if p_data and p_data.get("id"):
+                        cost = float(p_data.get("preco_custo", 0) or 0)
+                        
+                        if existing:
+                            existing.cost = cost
+                            existing.name = p_data.get("nome", existing.name)
+                        else:
+                            new_tp = TinyProduct(
+                                id=str(p_data.get("id")),
+                                sku=p_data.get("codigo"),
+                                name=p_data.get("nome"),
+                                cost=cost
+                            )
+                            self.db.add(new_tp)
+                        
+                        synced += 1
+                        
+                        # Commit every 50 to avoid large transactions
+                        if synced % 50 == 0:
+                            self.db.commit()
+                    else:
+                        errors += 1
+                except Exception as e:
+                    logger.warning(f"Error syncing SKU {sku}: {e}")
+                    errors += 1
+            
+            self.db.commit()
+            logger.info(f"Variation Costs Sync complete: {synced} synced, {skipped} skipped, {errors} errors")
+            self._log_sync("variation_costs", "success", start_time=datetime.datetime.now())
+            
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Variation Costs Sync failed: {e}")
+            self._log_sync("variation_costs", "error", msg=str(e), start_time=datetime.datetime.now())

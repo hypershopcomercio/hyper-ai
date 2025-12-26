@@ -16,7 +16,7 @@ if __name__ == "__main__":
     from app.services.sync_engine import SyncEngine
     
     def run_sync_job():
-        print("SCHEDULER: Starting Background Sync...")
+        print("SCHEDULER: Starting Background Sync (Orders/Ads)...")
         engine = None
         try:
             engine = SyncEngine()
@@ -26,16 +26,31 @@ if __name__ == "__main__":
             engine.sync_ads()
             # engine.sync_visits() # Visits take long. Maybe separate job?
             # For now, let's include orders which is critical for revenue.
-            print("SCHEDULER: Sync Complete.")
+            print("SCHEDULER: Orders/Ads Sync Complete.")
         except Exception as e:
             print(f"SCHEDULER: Error {e}")
         finally:
              if engine and hasattr(engine, 'db'):
                  engine.db.close()
-                 print("SCHEDULER: DB Session Closed.")
+
+    def run_visits_job():
+        print("SCHEDULER: Starting Frequent Visits Sync...")
+        engine = None
+        try:
+            engine = SyncEngine()
+            # Only sync visits to keep dashboard metrics alive
+            # Logic in internal method should handle active ads
+            engine.sync_visits() 
+            print("SCHEDULER: Visits Sync Complete.")
+        except Exception as e:
+            print(f"SCHEDULER: Visits Error {e}")
+        finally:
+             if engine and hasattr(engine, 'db'):
+                 engine.db.close()
             
     scheduler = BackgroundScheduler()
     scheduler.add_job(func=run_sync_job, trigger="interval", minutes=30)
+    scheduler.add_job(func=run_visits_job, trigger="interval", minutes=15) # Frequent visits update
     scheduler.start()
     
     # Initialize Webhook Processor

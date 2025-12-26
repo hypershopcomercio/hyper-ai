@@ -17,7 +17,7 @@ class IncrementalSyncService:
         self.db = db
         self.ml_api = MeliApiService(db)
         # Reuse logic from InitialLoadService for upserts
-        self.loader = InitialLoadService(db)
+        self.loader = InitialLoadService(db, meli_client=self.ml_api)
 
     def _get_seller_id(self):
         return self.loader._get_seller_id()

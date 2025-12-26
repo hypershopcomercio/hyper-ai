@@ -139,13 +139,48 @@ class WebhookProcessor:
             order_data = meli.get_order(order_id)
             
             if order_data:
-                # Upsert order using existing sync logic
-                from app.services.sync_engine import SyncEngine
-                engine = SyncEngine()  # Creates its own DB session
-                engine._process_order_full(order_data)
-                engine.db.commit()
-                engine.db.close()
-                logger.info(f"[WEBHOOK_PROCESSOR] Order {order_id} synced successfully")
+                # Use V2 InitialLoadService for consistent upsert logic (matches Manual Sync)
+                from app.services.sync_v2.initial_load import InitialLoadService
+                loader = InitialLoadService(db, meli_client=meli)
+                
+                # _upsert_order parses and updates MlOrder and Items
+                status = loader._upsert_order(order_data)
+                db.commit()
+                
+                logger.info(f"[WEBHOOK_PROCESSOR] Order {order_id} synced successfully ({status})")
+                
+                # ONLY broadcast NOVA VENDA celebration for NEW orders (created), NOT updates
+                # status from _upsert_order: 'created' = new, 'updated' = existing order changed
+                if status == 'created':
+                    try:
+                        from app.api.endpoints.sse import broadcast_event
+                        order_items = order_data.get('order_items', [])
+                        first_item = order_items[0] if order_items else {}
+                        product_title = first_item.get('item', {}).get('title', 'Novo Pedido')
+                        
+                        broadcast_event('order_update', {
+                            'order_id': order_id,
+                            'title': product_title,
+                            'status': status,
+                            'timestamp': datetime.utcnow().isoformat()
+                        })
+                        logger.info(f"[WEBHOOK_PROCESSOR] 🎉 SSE NOVA VENDA sent: {product_title}")
+                    except Exception as sse_err:
+                        logger.warning(f"[WEBHOOK_PROCESSOR] SSE order_update failed: {sse_err}")
+                else:
+                    logger.info(f"[WEBHOOK_PROCESSOR] Order {order_id} was UPDATE, no celebration")
+                
+                # Trigger specific Visits Sync for items in this order
+                try:
+                    order_items = order_data.get('order_items', [])
+                    item_ids = [item.get('item', {}).get('id') for item in order_items if item.get('item', {}).get('id')]
+                    if item_ids:
+                         logger.info(f"[WEBHOOK_PROCESSOR] Triggering visits sync for sold items: {item_ids}")
+                         # Note: We must call self._sync_visits_for_update, but it creates own DB session.
+                         # This matches pattern.
+                         self._sync_visits_for_update(item_ids=item_ids)
+                except Exception as v_err:
+                     logger.warning(f"[WEBHOOK_PROCESSOR] Failed to trigger visits update for order {order_id}: {v_err}")
             else:
                 logger.warning(f"[WEBHOOK_PROCESSOR] Order {order_id} not found in API")
                 
@@ -181,6 +216,10 @@ class WebhookProcessor:
                 engine.db.commit()
                 engine.db.close()
                 logger.info(f"[WEBHOOK_PROCESSOR] Item {item_id} synced")
+                
+                # Trigger Visits Sync for this item
+                self._sync_visits_for_update(item_ids=[item_id])
+                
         except Exception as e:
             logger.error(f"[WEBHOOK_PROCESSOR] Error syncing item {item_id}: {e}")
         finally:
@@ -213,29 +252,48 @@ class WebhookProcessor:
         if callback in self.subscribers:
             self.subscribers.remove(callback)
     
-    def _sync_visits_for_update(self):
+    def _sync_visits_for_update(self, item_ids: list = None):
         """
         Sync visits data from ML API to update real-time metrics.
-        This ensures visits and conversion rates are updated when webhooks arrive.
+        If item_ids provided, syncs only those items.
+        Otherwise, syncs a batch of active items.
         """
         from datetime import date, timedelta
         from app.models.ml_metrics_daily import MlMetricsDaily
         from app.models.ad import Ad
         import os
         
-        logger.info("[WEBHOOK_PROCESSOR] Syncing visits for real-time update...")
+        logger.info(f"[WEBHOOK_PROCESSOR] Syncing visits for real-time update (Specific Items: {item_ids})...")
         
         db = self.db_session_factory()
         meli = self.meli_service_factory(db)
         
         try:
             user_id = os.getenv('MELI_USER_ID')
-            if not user_id:
-                logger.warning("[WEBHOOK_PROCESSOR] MELI_USER_ID not set")
-                return
+            # If item_ids passed, we might not need user_id depending on MeliApiService method,
+            # but usually visits endpoint needs user? No, items/{id}/visits/time_window works with item ID.
             
-            # Get items to sync visits for (active items only, limit for performance)
-            items = db.query(Ad).filter(Ad.status == 'active').limit(20).all()
+            items = []
+            
+            # 1. Priority: Specific Items (e.g. from Order)
+            if item_ids:
+                items = db.query(Ad).filter(Ad.id.in_(item_ids)).all()
+            
+            # 2. Background: Sync a batch of active ads to keep "Total Visits" fresh
+            # We want to rotate these, maybe by 'visits_last_updated' asc?
+            # For now, let's just grab 50 active ads to ensure the global counter moves.
+            # Using random or just standard query limit? standard is fine if we assume rotation happens elsewhere or just brute force top active.
+            # Ideally: Order by visits_last_updated nulls first, then oldest.
+            
+            background_limit = 50
+            background_items = db.query(Ad).filter(
+                Ad.status == 'active', 
+                Ad.id.notin_([i.id for i in items])
+            ).order_by(Ad.visits_last_updated.asc()).limit(background_limit).all()
+            
+            items.extend(background_items)
+            
+            logger.info(f"[WEBHOOK_PROCESSOR] Syncing visits for {len(items)} items (Specific: {len(item_ids) if item_ids else 0}, Background: {len(background_items)})")
             
             today = date.today()
             yesterday = today - timedelta(days=1)

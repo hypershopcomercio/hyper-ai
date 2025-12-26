@@ -261,41 +261,144 @@ class MeliApiService:
         logger.warning(f"Failed to fetch order {order_id}: {resp.status_code}")
         return None
 
-    def get_ads_performance(self, item_ids: list[str], date_from: datetime.date, date_to: datetime.date):
+    def get_advertiser_id(self):
         """
-        Fetches Product Ads performance metrics for a list of items within a date range.
-        Uses /advertising/product_ads/performances/v1/by_item (or similar, depending on accurate API docs).
-        Fallback/Simplification: 
-        Actually, 'advertising' uses separate scope and endpoints. 
-        Endpoint: POST /advertising/product_ads/performances/v1/search
+        Gets the advertiser_id for Product Ads from the authenticated user.
+        Endpoint: GET /advertising/advertisers?product_id=PADS
+        Response: {"advertisers": [{"advertiser_id": 123456, "site_id": "MLB", ...}]}
         """
-        url = "https://api.mercadolibre.com/advertising/product_ads/performances/v1/search"
-        
-        # We need a token with 'advertising' scope. Assuming our token has it.
-        # Date format: YYYY-MM-DD
-        payload = {
-            "date_range": {
-                "from": date_from.strftime("%Y-%m-%d"),
-                "to": date_to.strftime("%Y-%m-%d")
-            },
-            "item_ids": item_ids
-        }
+        url = f"{self.base_url}/advertising/advertisers"
+        params = {"product_id": "PADS"}
+        headers = {**self.get_headers(), "Api-Version": "1"}
         
         try:
-            response = requests.post(url, json=payload, headers=self.get_headers())
+            response = requests.get(url, params=params, headers=headers, timeout=30)
             if response.status_code == 200:
-                # Response example: [ { item_id: "...", cost: 12.5, ... } ]
-                return response.json()
-            elif response.status_code == 403:
-                logger.warning("Ads API Access Forbidden. Check Token Scopes (advertising).")
-                return []
+                data = response.json()
+                # Response structure: {"advertisers": [{"advertiser_id": 347940, "site_id": "MLB", ...}]}
+                advertisers = data.get("advertisers", [])
+                if advertisers and len(advertisers) > 0:
+                    advertiser_id = advertisers[0].get("advertiser_id")
+                    logger.info(f"Found advertiser_id: {advertiser_id}")
+                    return advertiser_id
+                else:
+                    logger.warning("No advertisers found in response")
+                    return None
             else:
-                logger.error(f"Ads Performance Error: {response.text}")
-                return []
+                logger.error(f"Failed to get advertiser_id: {response.status_code} - {response.text}")
+                return None
+        except Exception as e:
+            logger.error(f"Error getting advertiser_id: {e}")
+            return None
+
+    def get_ads_performance(self, item_ids: list[str], date_from: datetime.date, date_to: datetime.date):
+        """
+        Fetches Product Ads performance metrics for items within a date range.
+        Uses correct endpoint: GET /advertising/MLB/advertisers/{advertiser_id}/product_ads/ads/search
+        """
+        # First, get the advertiser_id
+        advertiser_id = self.get_advertiser_id()
+        if not advertiser_id:
+            logger.warning("No advertiser_id found. User may not have Product Ads enabled.")
+            return {"results": []}
+        
+        # Build the correct URL
+        site_id = "MLB"  # Brazil
+        url = f"{self.base_url}/advertising/{site_id}/advertisers/{advertiser_id}/product_ads/ads/search"
+        
+        # Parameters for the search
+        params = {
+            "date_from": date_from.strftime("%Y-%m-%d"),
+            "date_to": date_to.strftime("%Y-%m-%d"),
+            "metrics": "clicks,prints,cost,cpc,acos,roas",
+            "limit": 100
+        }
+        
+        headers = {**self.get_headers(), "Api-Version": "1"}
+        
+        all_results = []
+        offset = 0
+        
+        try:
+            while True:
+                params["offset"] = offset
+                response = requests.get(url, params=params, headers=headers, timeout=30)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    results = data.get("results", [])
+                    all_results.extend(results)
+                    
+                    # Check pagination
+                    paging = data.get("paging", {})
+                    total = paging.get("total", 0)
+                    
+                    if len(all_results) >= total or not results:
+                        break
+                    
+                    offset += len(results)
+                    if offset > 1000:  # Safety limit
+                        break
+                elif response.status_code == 403:
+                    logger.warning("Ads API Access Forbidden (403). Check Token Scopes.")
+                    break
+                else:
+                    logger.error(f"Ads search failed: {response.status_code} - {response.text}")
+                    break
+            
+            # Filter results to only include requested item_ids and map to expected format
+            item_ids_set = set(item_ids)
+            filtered_results = []
+            
+            for ad in all_results:
+                ad_item_id = ad.get("item_id")
+                if ad_item_id in item_ids_set:
+                    metrics = ad.get("metrics", {})
+                    filtered_results.append({
+                        "item_id": ad_item_id,
+                        "metrics": {
+                            "cost": float(metrics.get("cost", 0) or 0),
+                            "clicks": int(metrics.get("clicks", 0) or 0),
+                            "prints": int(metrics.get("prints", 0) or 0),
+                            "cpc": float(metrics.get("cpc", 0) or 0),
+                            "acos": float(metrics.get("acos", 0) or 0),
+                            "roas": float(metrics.get("roas", 0) or 0)
+                        }
+                    })
+            
+            logger.info(f"Ads API returned {len(all_results)} ads, {len(filtered_results)} matched requested items")
+            return {"results": filtered_results}
+            
         except Exception as e:
             logger.error(f"Error fetching ads performance: {e}")
-            return []
+            return {"results": []}
 
+    def get_shipping_cost(self, item_id: str, seller_id: str):
+        """
+        Fetches the cost of free shipping for the seller for a specific item.
+        Endpoint: GET /users/{seller_id}/shipping_options/free?item_id={item_id}
+        """
+        url = f"{self.base_url}/users/{seller_id}/shipping_options/free"
+        params = {"item_id": item_id}
+        
+        try:
+            # Note: This endpoint is often used to calculate costs for offering free shipping.
+            response = requests.get(url, params=params, headers=self.get_headers())
+            if response.status_code == 200:
+                data = response.json()
+                # Expected structure: { "coverage": { "all_country": { "list_cost": 30.9, ... } } }
+                # Or just a fallback cost. We want the 'list_cost' which is what the seller pays.
+                # Simplification: Look for 'list_cost' in the 'all_country' rule usually.
+                coverage = data.get("coverage", {})
+                all_country = coverage.get("all_country", {})
+                return float(all_country.get("list_cost", 0.0))
+            else:
+                # 404 means maybe not applicable or error
+                # logger.warning(f"Shipping cost fetch failed for {item_id}: {response.status_code}")
+                return 0.0
+        except Exception as e:
+            logger.error(f"Error fetching shipping cost for {item_id}: {e}")
+            return 0.0
 
     def get_shipment(self, shipment_id: str):
         """
