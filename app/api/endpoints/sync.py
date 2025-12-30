@@ -13,8 +13,23 @@ def sync_listings():
     try:
         engine = SyncEngine()
         engine.sync_ads()
+        try:
+            engine.sync_tiny_stock() # Ensure costs are updated
+        except Exception as e_tiny:
+            # Don't fail entire sync if tiny fails
+            print(f"Tiny sync warning: {e_tiny}")
         engine.sync_metrics() # Crucial for Costs/Margins
         return jsonify({"success": True, "message": "Sync completed successfully."})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@api_bp.route('/sync/stock/ml', methods=['POST'])
+def sync_ml_stock():
+    # Sync ONLY ML Ads (Fastest way to get Full Stock updates)
+    try:
+        engine = SyncEngine()
+        engine.sync_ads() # This updates available_quantity and status
+        return jsonify({"success": True, "message": "ML Stock Sync Triggered"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -183,6 +198,41 @@ def get_sync_status():
         if not last_log_ml:
              last_log_ml = db.query(SystemLog).filter(SystemLog.module == 'listings', SystemLog.status == 'success').order_by(desc(SystemLog.timestamp)).first()
 
+        # HYPER SYNC 2.0: Check SyncJob table (New System)
+        # We want to show the LATEST successful sync involving critical data (ORDERS or LISTINGS)
+        from app.models.sync import SyncJob
+        last_job_order = db.query(SyncJob).filter(SyncJob.entity == 'orders', SyncJob.status == 'completed').order_by(desc(SyncJob.finished_at)).first()
+        last_job_ads = db.query(SyncJob).filter(SyncJob.entity == 'ads', SyncJob.status == 'completed').order_by(desc(SyncJob.finished_at)).first()
+        
+        # Determine the most recent timestamp between Logacy SystemLog and New SyncJob
+        candidates = []
+        if last_log_ml and last_log_ml.timestamp:
+            candidates.append(last_log_ml.timestamp)
+        if last_job_order and last_job_order.finished_at:
+            # SyncJob timestamps are TZ aware? Usually yes.
+            candidates.append(last_job_order.finished_at)
+        if last_job_ads and last_job_ads.finished_at:
+             candidates.append(last_job_ads.finished_at)
+             
+        # Get max
+        final_last_sync = None
+        if candidates:
+            # Handle potential offset-naive vs aware mix. Normalize to aware if needed or naive.
+            # Convert all to naive UTC or keep awareness.
+            # Assuming DB returns aware.
+            try:
+                final_last_sync = max(candidates)
+            except TypeError:
+                # If mix of offset-naive and aware, force conversion (remove tzinfo)
+                naive_candidates = [c.replace(tzinfo=None) if c.tzinfo else c for c in candidates]
+                final_last_sync = max(naive_candidates)
+                
+        # Override the legacy last_log_ml timestamp if we found a newer job
+        if final_last_sync:
+             last_sync_iso = final_last_sync.isoformat()
+        else:
+             last_sync_iso = None
+
         ads_count = db.query(Ad).count()
         
         # Tiny Status
@@ -201,7 +251,7 @@ def get_sync_status():
             "ml": {
                 "connected": ml_connected,
                 "seller_id": seller_id,
-                "last_sync": last_log_ml.timestamp.isoformat() if last_log_ml else None,
+                "last_sync": last_sync_iso,
                 "ads_count": ads_count,
                 "syncing": is_syncing_ml
             },
@@ -269,7 +319,31 @@ def trigger_quick_sync():
             import logging
             logging.error(f"Quick sync error: {e}")
     
-    thread = Thread(target=quick_sync_task)
-    thread.start()
-    return jsonify({"message": "Quick sync triggered"}), 202
+    # Run SYNCHRONOUSLY to ensure frontend waits for data
+    try:
+        # Check if we should force background (optional param)
+        is_async = request.json and request.json.get('async', False)
+        
+        if is_async:
+             thread = Thread(target=quick_sync_task)
+             thread.start()
+             return jsonify({"message": "Quick sync triggered in background"}), 202
+
+        # Run Blocking
+        engine = SyncEngine()
+        # Sync recent orders (last 2 hours)
+        engine.sync_orders_incremental(lookback_hours=2)
+        # Sync visits
+        engine.sync_visits()
+        engine.db.close()
+        
+        return jsonify({"message": "Quick sync completed", "success": True}), 200
+        
+    except Exception as e:
+        import logging
+        import traceback
+        logging.error(f"Quick sync error: {e}")
+        traceback.print_exc()
+        # Return 200 with error so frontend doesn't show 500 overlay
+        return jsonify({"success": False, "error": str(e), "message": "Sync failed gracefully"}), 200
 

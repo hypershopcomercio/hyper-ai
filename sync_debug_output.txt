@@ -1,0 +1,25 @@
+--- Sync Control Status ---
+Last Incremental Sync: 2025-12-26 14:23:40.881450-03:00
+Initial Load Status: completed
+
+--- Recent Orders in DB (Last 5) ---
+ID: 2000014472745140 | Date: 2025-12-26 17:04:12 | Status: paid | Total: 133.99
+ID: 2000014472648346 | Date: 2025-12-26 16:55:09 | Status: paid | Total: 174.90
+ID: 2000014472212946 | Date: 2025-12-26 16:22:08 | Status: paid | Total: 34.90
+ID: 2000014471956380 | Date: 2025-12-26 16:01:58 | Status: paid | Total: 133.99
+ID: 2000014471730716 | Date: 2025-12-26 15:44:24 | Status: paid | Total: 133.99
+
+--- API Test: Searching Orders (Last 3 Hours) ---
+Seller ID: 1400902328
+Requesting orders with params: {'seller': '1400902328', 'order.date_last_updated.from': '2025-12-26T14:24:06.442653+00:00', 'order.date_last_updated.to': '2025-12-26T17:24:06.442653+00:00', 'sort': 'date_asc', 'limit': 10}
+API Returned 10 orders.
+API Order: 2000014201635562 | Updated: 2025-12-09T17:11:25.000-04:00 | Status: paid
+API Order: 2000014272547844 | Updated: 2025-12-12T16:23:25.000-04:00 | Status: paid
+API Order: 2000014272545804 | Updated: 2025-12-12T16:23:28.000-04:00 | Status: paid
+API Order: 2000014272553224 | Updated: 2025-12-12T16:23:16.000-04:00 | Status: paid
+API Order: 2000014272545802 | Updated: 2025-12-12T16:23:27.000-04:00 | Status: paid
+API Order: 2000014372137154 | Updated: 2025-12-26T11:09:03.000-04:00 | Status: paid
+API Order: 2000014388176330 | Updated: 2025-12-26T11:15:40.000-04:00 | Status: paid
+API Order: 2000014393472698 | Updated: 2025-12-23T22:16:48.000-04:00 | Status: paid
+API Order: 2000014418086916 | Updated: 2025-12-26T12:48:11.000-04:00 | Status: paid
+API Order: 2000014419698344 | Updated: 2025-12-26T13:14:26.000-04:00 | Status: paid

@@ -48,12 +48,11 @@ if __name__ == "__main__":
              if engine and hasattr(engine, 'db'):
                  engine.db.close()
             
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(func=run_sync_job, trigger="interval", minutes=30)
-    scheduler.add_job(func=run_visits_job, trigger="interval", minutes=15) # Frequent visits update
-    scheduler.start()
+    # Enable CORS for development (allowing frontend localhost:3000)
+    from flask_cors import CORS
+    CORS(app) 
     
-    # Initialize Webhook Processor
+    # Imports needed for processor and scheduler
     from app.api.endpoints.webhooks import webhook_queue
     from app.services.webhook_processor import init_processor
     from app.core.database import SessionLocal
@@ -64,12 +63,36 @@ if __name__ == "__main__":
     
     def meli_factory(db):
         return MeliApiService(db_session=db)
-    
-    processor = init_processor(webhook_queue, db_factory, meli_factory)
-    processor.start()
-    print("WEBHOOK_PROCESSOR: Started")
-    
-    # Enable CORS for development (allowing frontend localhost:3000)
-    from flask_cors import CORS
-    CORS(app) 
-    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False) # use_reloader=False to prevent double scheduler
+
+    # Check if we are in the reloader process (to avoid double scheduler)
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        scheduler = BackgroundScheduler()
+        
+        # 1. Sync Jobs (Legacy Interval)
+        scheduler.add_job(func=run_sync_job, trigger="interval", minutes=30)
+        scheduler.add_job(func=run_visits_job, trigger="interval", minutes=15)
+        
+        # 2. Forecast Automation (Cron Schedule)
+        from app.jobs.forecast_jobs import (
+            run_daily_predictions,
+            run_hourly_reconciliation, 
+            run_weekly_calibration
+        )
+        
+        # Daily prediction generation at 00:00 (generates all 24h for next day)
+        scheduler.add_job(func=run_daily_predictions, trigger="cron", hour=0, minute=0)
+        
+        # Reconciliation at :05 every hour (closes previous hour)
+        scheduler.add_job(func=run_hourly_reconciliation, trigger="cron", minute=5)
+        
+        # Calibration at :10 every hour (learns from recent errors)
+        scheduler.add_job(func=run_weekly_calibration, trigger="cron", minute=10)
+        
+        scheduler.start()
+        
+        # Initialize Webhook Processor only in child process too
+        processor = init_processor(webhook_queue, db_factory, meli_factory)
+        processor.start()
+        print("WEBHOOK_PROCESSOR: Started")
+
+    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=True)

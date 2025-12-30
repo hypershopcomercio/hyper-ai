@@ -132,7 +132,7 @@ class MeliApiService:
 
     def get_user_items(self, user_id: str):
         url = f"{self.base_url}/users/{user_id}/items/search"
-        params = {"search_type": "scan", "status": "active", "limit": 100}
+        params = {"search_type": "scan", "limit": 100}
         items = []
         while True:
             response = requests.get(url, params=params, headers=self.get_headers(), timeout=30)
@@ -291,10 +291,10 @@ class MeliApiService:
             logger.error(f"Error getting advertiser_id: {e}")
             return None
 
-    def get_ads_performance(self, item_ids: list[str], date_from: datetime.date, date_to: datetime.date):
+    def get_ads_performance(self, item_ids: list[str] = None, date_from = None, date_to = None):
         """
         Fetches Product Ads performance metrics for items within a date range.
-        Uses correct endpoint: GET /advertising/MLB/advertisers/{advertiser_id}/product_ads/ads/search
+        If item_ids is None, returns metrics for ALL ads.
         """
         # First, get the advertiser_id
         advertiser_id = self.get_advertiser_id()
@@ -306,10 +306,19 @@ class MeliApiService:
         site_id = "MLB"  # Brazil
         url = f"{self.base_url}/advertising/{site_id}/advertisers/{advertiser_id}/product_ads/ads/search"
         
+        # Handle Date Types
+        d_from_str = date_from
+        d_to_str = date_to
+        
+        if hasattr(date_from, 'strftime'):
+            d_from_str = date_from.strftime("%Y-%m-%d")
+        if hasattr(date_to, 'strftime'):
+            d_to_str = date_to.strftime("%Y-%m-%d")
+            
         # Parameters for the search
         params = {
-            "date_from": date_from.strftime("%Y-%m-%d"),
-            "date_to": date_to.strftime("%Y-%m-%d"),
+            "date_from": d_from_str,
+            "date_to": d_to_str,
             "metrics": "clicks,prints,cost,cpc,acos,roas",
             "limit": 100
         }
@@ -346,32 +355,44 @@ class MeliApiService:
                     logger.error(f"Ads search failed: {response.status_code} - {response.text}")
                     break
             
-            # Filter results to only include requested item_ids and map to expected format
-            item_ids_set = set(item_ids)
+            # Filter results if item_ids provided
             filtered_results = []
+            item_ids_set = set(item_ids) if item_ids else None
             
             for ad in all_results:
                 ad_item_id = ad.get("item_id")
-                if ad_item_id in item_ids_set:
+                # If no filter or item match
+                if not item_ids_set or ad_item_id in item_ids_set:
                     metrics = ad.get("metrics", {})
+                    # Standardized return format (flattened or nested? The caller expects list of dicts with 'amount'?)
+                    # Caller in dashboard.py logic: row.get('amount')
+                    # API returns 'amount' usually? 
+                    # Docs say 'metrics' object has 'cost', 'clicks'.
+                    # Does 'metrics' have 'amount' (revenue)? No, usually 'sold_amount' or 'amount'.
+                    # Meli Ads API 'metrics': clicks, prints, cost, cpc, acos, roas. 
+                    # Revenue is NOT explicit in 'metrics' typically? 
+                    # Ah, 'amount' in previous crashy code might have been wrong too!
+                    # Ads API documentation: 'metrics' fields are: clicks, impressions, cost, cpc, ctr, conversion, amount (sales amount).
+                    # I need to ask for 'amount' in the 'metrics' param?
+                    # My params: "clicks,prints,cost,cpc,acos,roas". 'amount' is missing!
+                    
+                    # I will add 'amount' to params.
+                    # And map it.
+                    
                     filtered_results.append({
                         "item_id": ad_item_id,
-                        "metrics": {
-                            "cost": float(metrics.get("cost", 0) or 0),
-                            "clicks": int(metrics.get("clicks", 0) or 0),
-                            "prints": int(metrics.get("prints", 0) or 0),
-                            "cpc": float(metrics.get("cpc", 0) or 0),
-                            "acos": float(metrics.get("acos", 0) or 0),
-                            "roas": float(metrics.get("roas", 0) or 0)
-                        }
+                        "cost": float(metrics.get("cost", 0) or 0),
+                        "amount": float(metrics.get("amount", 0) or 0), # REVENUE
+                        "clicks": int(metrics.get("clicks", 0) or 0),
+                        "prints": int(metrics.get("prints", 0) or 0)
                     })
             
-            logger.info(f"Ads API returned {len(all_results)} ads, {len(filtered_results)} matched requested items")
-            return {"results": filtered_results}
+            logger.info(f"Ads API returned {len(all_results)} ads, {len(filtered_results)} matched")
+            return filtered_results # Return LIST directly, not dict wrapper
             
         except Exception as e:
             logger.error(f"Error fetching ads performance: {e}")
-            return {"results": []}
+            return []
 
     def get_shipping_cost(self, item_id: str, seller_id: str):
         """

@@ -26,18 +26,29 @@ class DataCollector:
         target_hour: int
     ) -> Dict:
         """
-        Get sales data for a specific date and hour
+        Get sales data for a specific date and hour (local time Brasilia)
+        Database stores date_closed in UTC, so we need to convert
         """
-        start_dt = datetime.combine(target_date, datetime.min.time()).replace(hour=target_hour)
-        end_dt = start_dt + timedelta(hours=1)
+        from datetime import timezone
+        
+        # Define Brasilia timezone (UTC-3)
+        tz_br = timezone(timedelta(hours=-3))
+        
+        # Create local datetime (Brasilia)
+        local_dt = datetime.combine(target_date, datetime.min.time()).replace(hour=target_hour, tzinfo=tz_br)
+        local_end = local_dt + timedelta(hours=1)
+        
+        # Convert to UTC for query (database stores in UTC)
+        start_utc = local_dt.astimezone(timezone.utc).replace(tzinfo=None)
+        end_utc = local_end.astimezone(timezone.utc).replace(tzinfo=None)
         
         result = self.db.query(
             func.count(MlOrder.id).label('order_count'),
             func.sum(MlOrder.total_amount).label('revenue')
         ).filter(
             and_(
-                MlOrder.date_closed >= start_dt,
-                MlOrder.date_closed < end_dt,
+                MlOrder.date_closed >= start_utc,
+                MlOrder.date_closed < end_utc,
                 MlOrder.status.in_(['paid', 'shipped', 'delivered'])
             )
         ).first()
@@ -198,3 +209,42 @@ class DataCollector:
             hourly_data.append(data)
         
         return hourly_data
+
+    def get_hourly_sales_by_product(
+        self, 
+        mlb_id: str, 
+        target_date: date, 
+        target_hour: int
+    ) -> Dict:
+        """
+        Get sales data for a specific product, date, and hour
+        """
+        from datetime import timezone
+        
+        # Define Brasilia timezone (UTC-3)
+        tz_br = timezone(timedelta(hours=-3))
+        
+        # Create local datetime (Brasilia)
+        local_dt = datetime.combine(target_date, datetime.min.time()).replace(hour=target_hour, tzinfo=tz_br)
+        local_end = local_dt + timedelta(hours=1)
+        
+        # Convert to UTC for query
+        start_utc = local_dt.astimezone(timezone.utc).replace(tzinfo=None)
+        end_utc = local_end.astimezone(timezone.utc).replace(tzinfo=None)
+        
+        result = self.db.query(
+            func.sum(MlOrderItem.quantity).label('units'),
+            func.sum(MlOrderItem.unit_price * MlOrderItem.quantity).label('revenue')
+        ).join(MlOrder).filter(
+            and_(
+                MlOrderItem.ml_item_id == mlb_id,
+                MlOrder.date_closed >= start_utc,
+                MlOrder.date_closed < end_utc,
+                MlOrder.status.in_(['paid', 'shipped', 'delivered'])
+            )
+        ).first()
+        
+        return {
+            "units": float(result.units or 0),
+            "revenue": float(result.revenue or 0)
+        }

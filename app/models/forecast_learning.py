@@ -46,6 +46,10 @@ class ForecastLog(Base):
     baseline_usado = Column(Numeric(10, 2), nullable=True)  # Base value before multipliers
     modelo_versao = Column(String(50), default='heuristic_v1')  # Model version for tracking
     
+    # Calibration tracking
+    calibrated = Column(String(1), default='N')  # 'Y' = used in calibration, 'N' = not yet
+    calibration_impact = Column(JSONB, nullable=True)  # Details of calibration adjustments made using this log
+    
     def __repr__(self):
         return f"<ForecastLog {self.id}: {self.hora_alvo} prev={self.valor_previsto} real={self.valor_real}>"
 
@@ -119,6 +123,9 @@ class MultiplierConfig(Base):
     # Is this value calibrated from data or still using default?
     calibrado = Column(String(20), default='default')  # 'default', 'manual', 'auto'
     
+    # If locked, auto-calibration will skip this multiplier
+    locked = Column(String(1), default='N')  # 'Y' = locked, 'N' = unlocked
+    
     __table_args__ = (
         # Unique constraint on type + key
         {'schema': None},
@@ -126,3 +133,100 @@ class MultiplierConfig(Base):
     
     def __repr__(self):
         return f"<MultiplierConfig {self.tipo}.{self.chave}={self.valor}>"
+
+
+class LearningSnapshot(Base):
+    """
+    Daily snapshot of learning metrics for historical analysis.
+    Created at 23:55 each day to capture the day's performance.
+    """
+    __tablename__ = 'learning_snapshots'
+    
+    id = Column(Integer, primary_key=True)
+    
+    # Date of snapshot (unique per day)
+    data = Column(Date, nullable=False, unique=True, index=True)
+    
+    # General metrics
+    total_previsoes = Column(Integer, default=0)
+    erro_medio = Column(Numeric(6, 2), nullable=True)  # Signed average error
+    erro_absoluto_medio = Column(Numeric(6, 2), nullable=True)  # Absolute average error
+    acuracia = Column(Numeric(5, 2), nullable=True)  # 100 - abs error
+    
+    # Revenue comparison
+    receita_prevista_total = Column(Numeric(12, 2), default=0)
+    receita_real_total = Column(Numeric(12, 2), default=0)
+    
+    # Factor performance (JSON with error per factor type/key)
+    # {"day_of_week": {"seg": 5.2, "ter": -3.1}, "hour": {"11": -15.2, "15": 3.4}}
+    fatores_performance = Column(JSONB, default={})
+    
+    # Calibrations made today
+    ajustes_realizados = Column(Integer, default=0)
+    detalhes_ajustes = Column(JSONB, default=[])
+    
+    # Best/Worst performers
+    melhor_fator = Column(String(100), nullable=True)  # "hour.15" (lowest error)
+    pior_fator = Column(String(100), nullable=True)  # "hour.11" (highest error)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    def __repr__(self):
+        return f"<LearningSnapshot {self.data}: acc={self.acuracia}%>"
+
+
+class ForecastEvent(Base):
+    """
+    Special events that affect sales predictions.
+    Examples: Black Friday, Natal, Dia das Mães, promoções, etc.
+    """
+    __tablename__ = 'forecast_events'
+    
+    id = Column(Integer, primary_key=True)
+    
+    # Event identification
+    nome = Column(String(100), nullable=False)
+    descricao = Column(Text, nullable=True)
+    
+    # Date range
+    data_inicio = Column(Date, nullable=False, index=True)
+    data_fim = Column(Date, nullable=False)
+    
+    # Impact multiplier (1.0 = no impact, 1.5 = +50%, 0.8 = -20%)
+    multiplicador = Column(Numeric(4, 2), nullable=False, default=1.0)
+    
+    # Event type for categorization
+    tipo = Column(String(50), default='manual')  # 'feriado', 'promocao', 'sazonal', 'manual'
+    
+    # Recurrence
+    recorrente = Column(String(1), default='N')  # 'Y' = yearly, 'N' = one-time
+    
+    # Status
+    ativo = Column(String(1), default='Y')  # 'Y' = active, 'N' = inactive
+    
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def __repr__(self):
+        return f"<ForecastEvent {self.nome}: {self.data_inicio} - {self.data_fim} ({self.multiplicador}x)>"
+
+
+class AllowedFactor(Base):
+    """
+    Whitelist for allowed factor keys to prevent garbage data.
+    E.g. factor_type='momentum', factor_key='up'
+    """
+    __tablename__ = 'allowed_factors'
+    
+    id = Column(Integer, primary_key=True)
+    factor_type = Column(String(50), nullable=False, index=True)
+    factor_key = Column(String(50), nullable=False)
+    description = Column(String(200), nullable=True)
+    is_active = Column(String(1), default='Y')
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Unique constraint handled implicitly or can be explicit
+    
+    def __repr__(self):
+        return f"<AllowedFactor {self.factor_type}.{self.factor_key}>"

@@ -18,11 +18,33 @@ app.register_blueprint(api_bp)
 # Scheduler Setup
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.scheduler.tasks import run_daily_sync
+from app.jobs.forecast_jobs import (
+    run_daily_predictions,
+    run_hourly_reconciliation, 
+    run_weekly_calibration,
+    run_daily_snapshot
+)
 
 scheduler = BackgroundScheduler()
-# Run daily at 04:00 AM
-scheduler.add_job(func=run_daily_sync, trigger="cron", hour=4, minute=0)
+
+# Daily sync at 04:00 AM
+scheduler.add_job(func=run_daily_sync, trigger="cron", hour=4, minute=0, id="run_daily_sync")
+
+# --- Forecast Automation ---
+# 1. Daily Prediction Generation: At 00:00 (generates all 24h for next day)
+scheduler.add_job(func=run_daily_predictions, trigger="cron", hour=0, minute=0, id="run_daily_predictions")
+
+# 2. Reconciliation: Hourly at :05 (re-reconciles all of today's hours)
+scheduler.add_job(func=run_hourly_reconciliation, trigger="cron", minute=5, id="run_hourly_reconciliation")
+
+# 3. Micro-Calibration: Hourly at :10 (1% max adjustment per cycle)
+scheduler.add_job(func=run_weekly_calibration, trigger="cron", minute=10, id="run_hourly_calibration")
+
+# 4. Daily Snapshot: At 23:55 (saves day's learning metrics)
+scheduler.add_job(func=run_daily_snapshot, trigger="cron", hour=23, minute=55, id="run_daily_snapshot")
+
 scheduler.start()
+logger.info("Scheduler started with Forecast Automation (Hourly at :00, :05, :10 + Daily Snapshot at 23:55)")
 
 
 

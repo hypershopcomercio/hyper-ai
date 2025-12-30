@@ -22,6 +22,22 @@ class IncrementalSyncService:
     def _get_seller_id(self):
         return self.loader._get_seller_id()
 
+    def _emit_sale_event(self, order_data):
+        try:
+            from app.api.endpoints.sse import broadcast_event
+            order_items = order_data.get('order_items', [])
+            first = order_items[0] if order_items else {}
+            title = first.get('item', {}).get('title', 'Novo Pedido')
+            
+            broadcast_event('order_update', {
+                'title': title,
+                'status': 'created',
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            })
+            logger.info(f"[Incremental] 🎉 SSE Notification sent for: {title}")
+        except Exception as e:
+            logger.warning(f"[Incremental] Failed to emit SSE: {e}")
+
     def sync_orders_incremental(self, lookback_hours: int = None):
         ENTITY = 'orders'
         seller_id = self._get_seller_id()
@@ -107,7 +123,9 @@ class IncrementalSyncService:
                         if detail_resp.status_code == 200:
                             full_order = detail_resp.json()
                             res = self.loader._upsert_order(full_order)
-                            if res == 'created': created += 1
+                            if res == 'created': 
+                                created += 1
+                                self._emit_sale_event(full_order)
                             else: updated += 1
                         else:
                             failed += 1

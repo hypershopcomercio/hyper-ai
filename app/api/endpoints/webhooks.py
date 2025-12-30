@@ -92,7 +92,23 @@ def receive_ml_webhook():
 @api_bp.route('/webhooks/status', methods=['GET'])
 def webhook_status():
     """Get webhook processing status."""
+    # Logic to return success timestamp for polling
+    from app.core.database import SessionLocal
+    from app.models.sync import SyncJob
+    from sqlalchemy import desc
+    
+    db = SessionLocal()
+    last_ts = None
+    try:
+        # Check last incremental order sync - valid proxy for "webhook processed"
+        last_job = db.query(SyncJob).filter(SyncJob.entity == 'orders', SyncJob.status == 'completed').order_by(desc(SyncJob.finished_at)).first()
+        if last_job and last_job.finished_at:
+             last_ts = last_job.finished_at.isoformat()
+    finally:
+        db.close()
+
     return jsonify({
         "queue_size": webhook_queue.qsize(),
-        "processed_count": len(processed_events)
+        "processed_count": len(processed_events),
+        "last_processed_at": last_ts
     })

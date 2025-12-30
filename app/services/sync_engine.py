@@ -552,30 +552,66 @@ class SyncEngine:
 
     def _fetch_and_save_tiny(self, sku: str):
         # Fetch from API
-        # Using search_product (singular) which returns a single dict or None
         p_data = self.tiny_service.search_product(sku)
         if p_data:
-            # Save/Update TinyProduct
-            # Basic save logic if needed (Assuming TinyProduct model exists and we just need ID)
-            # For now returning dummy object or assuming it's managed elsewhere?
-            # Actually, we need to SAVE it to DB to link it.
-            
             tiny_id = p_data.get("id")
             if not tiny_id:
                 return None
-                
-            tp = self.db.query(TinyProduct).filter(TinyProduct.id == tiny_id).first()
-            if not tp:
-                tp = TinyProduct(id=tiny_id)
-                self.db.add(tp)
             
-            tp.sku = p_data.get("codigo")
-            tp.name = p_data.get("nome")
-            tp.cost = float(p_data.get("preco_custo", 0))
-            # ... other fields
-            self.db.flush() # Get ID
+            # Fetch FULL details to get parent/variations
+            details = self.tiny_service.get_product_details(str(tiny_id))
+            if not details:
+                # Fallback to search data
+                details = p_data
+            
+            # Check for Parent
+            parent_id = details.get("id_produto_pai")
+            if parent_id and str(parent_id) != "0" and str(parent_id) != str(tiny_id):
+                # Fetch Parent to get all siblings
+                logger.info(f"SKU {sku} has parent {parent_id}. Fetching parent & siblings...")
+                parent_details = self.tiny_service.get_product_details(str(parent_id))
+                if parent_details:
+                    # Save Parent
+                    self._save_tiny_product_from_data(parent_details)
+                    # Save All Variations (Siblings)
+                    if "variacoes" in parent_details:
+                        self._process_variations_list(parent_details["variacoes"])
+                    
+                    # Refetch self from DB to return correct object
+                    return self.db.query(TinyProduct).filter(TinyProduct.id == tiny_id).first()
+
+            # If no parent or parent fetch failed, save self
+            tp = self._save_tiny_product_from_data(details)
+            
+            # If self has variations (is parent)
+            if "variacoes" in details:
+                self._process_variations_list(details["variacoes"])
+                
             return tp
         return None
+
+    def _save_tiny_product_from_data(self, data: dict):
+        t_id = str(data.get("id"))
+        tp = self.db.query(TinyProduct).filter(TinyProduct.id == t_id).first()
+        if not tp:
+            tp = TinyProduct(id=t_id)
+            self.db.add(tp)
+        
+        tp.sku = data.get("codigo")
+        tp.name = data.get("nome")
+        tp.cost = float(data.get("preco_custo", 0))
+        self.db.flush()
+        return tp
+
+    def _process_variations_list(self, variations: list):
+        """
+        Process list of variations from Tiny API details.
+        Format: [{'variacao': {'id':..., 'codigo':..., ...}}, ...]
+        """
+        for v_wrapper in variations:
+            v_data = v_wrapper.get("variacao")
+            if v_data:
+                self._save_tiny_product_from_data(v_data) 
         
     def sync_metrics(self):
         """
