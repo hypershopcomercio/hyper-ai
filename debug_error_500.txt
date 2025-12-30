@@ -1,9 +1,0 @@
-Error in get_forecast_log_detail log_id=582:
-name 'and_' is not defined
-
-Traceback:
-Traceback (most recent call last):
-  File "C:\Users\Usuário\OneDrive\Documentos\01 - Projetos\projeto-hyper-ai\hyper-data\app\api\endpoints\forecast.py", line 559, in get_forecast_log_detail
-    and_(
-    ^^^^
-NameError: name 'and_' is not defined
