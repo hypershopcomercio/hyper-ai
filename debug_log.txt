@@ -1,0 +1,12 @@
+
+[DEBUG] 2025-12-30 00:01:51.177646 - Loaded 0 orders for period 1
+[DEBUG] StartUTC: 2025-12-30 03:00:00, EndUTC: 2025-12-31 02:59:59
+
+[DEBUG] 2025-12-30 00:01:51.914498 - Loaded 0 orders for period 1
+[DEBUG] StartUTC: 2025-12-30 03:00:00, EndUTC: 2025-12-31 02:59:59
+
+[DEBUG] 2025-12-30 00:01:53.029941 - Loaded 0 orders for period 1
+[DEBUG] StartUTC: 2025-12-30 03:00:00, EndUTC: 2025-12-31 02:59:59
+
+[DEBUG] 2025-12-30 00:01:58.800759 - Loaded 23 orders for period 0
+[DEBUG] StartUTC: 2025-12-29 03:00:00, EndUTC: 2025-12-30 03:00:00
