@@ -12,6 +12,7 @@ from app.core.database import SessionLocal
 from app.models.ad import Ad
 from app.models.ml_order import MlOrder, MlOrderItem
 from app.models.product_forecast import ProductForecast
+from app.core.constants import STOCK_RISK_WARNING_DAYS, STOCK_RISK_CRITICAL_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +27,9 @@ def sync_product_metrics():
     db = SessionLocal()
     
     try:
-        # Get all active products
-        products = db.query(Ad).filter(Ad.status == 'active').all()
-        logger.info(f"[PRODUCT-SYNC] Processing {len(products)} active products...")
+        # Get all relevant products (active or paused/out-of-stock)
+        products = db.query(Ad).filter(Ad.status.in_(['active', 'paused'])).all()
+        logger.info(f"[PRODUCT-SYNC] Processing {len(products)} active/paused products...")
         
         # Calculate date ranges
         now = datetime.now()
@@ -55,6 +56,7 @@ def sync_product_metrics():
                 pf.title = product.title
                 pf.sku = product.sku
                 pf.category_ml = product.category_name
+                pf.thumbnail = product.thumbnail
                 pf.price = Decimal(str(product.price)) if product.price else Decimal('0')
                 pf.cost = Decimal(str(product.cost)) if product.cost else Decimal('0')
                 
@@ -101,7 +103,10 @@ def sync_product_metrics():
                 ).scalar() or 0
                 
                 if prev_week_sales > 0:
-                    pf.trend_pct = Decimal(str(((pf.total_units_7d - prev_week_sales) / prev_week_sales) * 100))
+                    val = ((pf.total_units_7d - prev_week_sales) / prev_week_sales) * 100
+                    # Cap trend_pct to 999.99 for DB constraint Numeric(5, 2)
+                    pf.trend_pct = Decimal(str(min(max(val, -999.99), 999.99))).quantize(Decimal('0.00'))
+                    
                     if pf.trend_pct > 10:
                         pf.trend = 'up'
                     elif pf.trend_pct < -10:
@@ -114,23 +119,37 @@ def sync_product_metrics():
                 
                 # Stock info (from Ad table)
                 pf.stock_current = product.available_quantity or 0
-                pf.stock_full = 0  # TODO: Get from Full inventory if available
+                pf.stock_incoming = getattr(product, 'stock_incoming', 0) or 0
+                pf.stock_full = product.available_quantity if product.is_full else 0
+                pf.stock_local = getattr(product, 'stock_tiny', 0) or 0
+                
+                # Use total stock including incoming for coverage, but prioritize real current stock for status
+                total_stock_for_coverage = pf.stock_current + pf.stock_incoming
                 
                 # Calculate days of coverage
                 if pf.avg_units_7d and pf.avg_units_7d > 0:
-                    pf.days_of_coverage = Decimal(str(pf.stock_current)) / pf.avg_units_7d
+                    coverage = Decimal(str(total_stock_for_coverage)) / pf.avg_units_7d
+                    # Cap to 999.9 for DB constraint Numeric(5, 1)
+                    pf.days_of_coverage = min(coverage, Decimal('999.9')).quantize(Decimal('0.1'))
                 else:
-                    pf.days_of_coverage = Decimal('999')  # No sales = infinite coverage
+                    pf.days_of_coverage = Decimal('999.9')  # No sales = infinite coverage
                 
                 # Determine stock status
-                if pf.stock_current == 0:
+                if pf.stock_current == 0 and pf.stock_incoming == 0:
                     pf.stock_status = 'stockout'
                     pf.has_rupture_risk = True
-                elif pf.days_of_coverage < 3:
+                elif pf.stock_current == 0 and pf.stock_incoming > 0:
+                    # In process of being restocked - NOT a rupture for Supply planning purposes
+                    pf.stock_status = 'restocking'
+                    pf.has_rupture_risk = False
+                elif pf.days_of_coverage < 3: # Super Critical
                     pf.stock_status = 'critical'
                     pf.has_rupture_risk = True
-                elif pf.days_of_coverage < 7:
+                elif pf.days_of_coverage < STOCK_RISK_CRITICAL_DAYS:
                     pf.stock_status = 'low'
+                    pf.has_rupture_risk = True
+                elif pf.days_of_coverage < STOCK_RISK_WARNING_DAYS:
+                    pf.stock_status = 'warning' # New status to match dashboard risk profile
                     pf.has_rupture_risk = True
                 else:
                     pf.stock_status = 'ok'
@@ -139,13 +158,17 @@ def sync_product_metrics():
                 # Calculate today's forecast
                 # Simple: avg_units_7d * temporal_factors (to be enhanced)
                 stock_factor = 1.0 if pf.stock_current > 0 else 0.0
+                # If restocking, we might still have a tiny bit of sales or it might go live soon
+                if pf.stock_current == 0 and pf.stock_incoming > 0:
+                    stock_factor = 0.1 # Placeholder
+                
                 if pf.stock_current > 0 and pf.days_of_coverage and pf.days_of_coverage < 1:
                     stock_factor = float(pf.days_of_coverage)
                 
                 pf.forecast_units_today = pf.avg_units_7d * Decimal(str(stock_factor))
                 pf.forecast_revenue_today = pf.forecast_units_today * pf.price if pf.price else Decimal('0')
                 
-                pf.is_active = True
+                pf.is_active = (product.status == 'active')
                 pf.updated_at = datetime.utcnow()
                 
                 synced += 1

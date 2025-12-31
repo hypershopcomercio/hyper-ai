@@ -65,7 +65,7 @@ class HyperForecast:
             target_date = datetime.now().date()
         
         now = datetime.now()
-        is_future = target_date >= now.date() and target_hour > now.hour
+        is_future = (target_date > now.date()) or (target_date == now.date() and target_hour > now.hour)
         
         # ================================================
         # GLOBAL FACTORS - ALL factors from database
@@ -114,7 +114,7 @@ class HyperForecast:
         # ================================================
         
         product_based = self._calculate_product_based_hourly(
-            target_hour, target_date, global_multiplier, all_multipliers
+            target_hour, target_date, global_multiplier, all_multipliers, now
         )
         
         if product_based:
@@ -187,7 +187,8 @@ class HyperForecast:
         target_hour: int,
         target_date: date,
         global_multiplier: float,
-        global_factors: Dict
+        global_factors: Dict,
+        now: datetime
     ) -> Optional[Dict]:
         """
         Calculate hourly prediction based on individual products.
@@ -254,9 +255,9 @@ class HyperForecast:
                 total_revenue += revenue
                 potential_revenue += rev_potential
                 
-                # Check for realized sales if in past (repair/backfill mode)
+                # Check for realized sales if in past or current hour (repair/backfill/real-time mode)
                 realized_units = 0
-                if target_date < datetime.now().date() or (target_date == datetime.now().date() and target_hour < datetime.now().hour):
+                if target_date < now.date() or (target_date == now.date() and target_hour <= now.hour):
                      # Quick check from data collector for this specific product/hour
                      # Since we are inside a loop, this could be slow. Better to batch?
                      # For now, let's trust DataCollector is fast or cached.

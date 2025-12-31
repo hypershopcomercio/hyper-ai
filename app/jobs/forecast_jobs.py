@@ -376,10 +376,10 @@ def run_weekly_calibration(force_run=False, target_date=None):
         
         logger.info(f"[FORECAST-JOB] Analyzing {len(logs)} predictions from last 24h...")
         
-        # Group errors by factor type
+        # Group errors by factor type (GLOBAL factors)
         factor_errors = _analyze_errors_by_factor(logs, force_run=force_run)
         
-        # Apply micro-calibration adjustments
+        # Apply micro-calibration adjustments for GLOBAL factors
         adjustments_made = []
         
         for factor_type, factor_data in factor_errors.items():
@@ -402,6 +402,30 @@ def run_weekly_calibration(force_run=False, target_date=None):
                         db, factor_type, factor_key, avg_error, sample_count
                     )
                     if adjustment:
+                        adjustments_made.append(adjustment)
+        
+        # ============================================================
+        # PRODUCT FACTOR CALIBRATION (NEW)
+        # Analyze errors by product-specific factors
+        # ============================================================
+        product_factor_errors = _analyze_product_factor_errors(logs, force_run=force_run)
+        
+        for factor_type, factor_data in product_factor_errors.items():
+            for factor_key, stats in factor_data.items():
+                avg_error = stats["avg_error"]
+                sample_count = stats["count"]
+                
+                if sample_count < 3 and not force_run:
+                    continue
+                
+                threshold = 0.1 if force_run else 5.0
+                
+                if abs(avg_error) > threshold:
+                    adjustment = _apply_product_factor_calibration(
+                        db, factor_type, factor_key, avg_error, sample_count
+                    )
+                    if adjustment:
+                        adjustment["is_product_factor"] = True  # Mark as product factor
                         adjustments_made.append(adjustment)
         
         # Mark all logs used in this calibration as calibrated
@@ -749,6 +773,198 @@ def _apply_micro_calibration(
     db.add(history)
     
     logger.info(f"[FORECAST-JOB] Micro-calibrated {factor_type}.{factor_key}: {old_value:.3f} -> {new_value:.3f} (±1%)")
+    
+    return {
+        "factor_type": factor_type,
+        "factor_key": factor_key,
+        "old_value": old_value,
+        "new_value": round(new_value, 3),
+        "avg_error": round(avg_error, 1),
+        "samples": sample_count
+    }
+
+
+def _analyze_product_factor_errors(logs: List[ForecastLog], force_run: bool = False) -> Dict:
+    """
+    Analyze prediction errors grouped by PRODUCT-specific factors.
+    These are factors that vary by product (stock_pressure, catalog_boost, etc).
+    
+    Uses the product_multipliers stored in each product's _product_mix entry.
+    """
+    # Product factors we want to calibrate
+    PRODUCT_FACTOR_TYPES = [
+        "stock_pressure",
+        "catalog_boost", 
+        "listing_health",
+        "free_shipping",
+        "shipping_advantage",
+        "listing_type",
+        "gold_medal",
+        "promo_active",
+        "velocity_score",
+        "top_sellers",
+        "visits_trend",
+        "conversion_rate",
+        "price_competitiveness",
+        "search_position"
+    ]
+    
+    # Initialize structure
+    factor_errors = {}
+    for ft in PRODUCT_FACTOR_TYPES:
+        factor_errors[ft] = {}
+    
+    for log in logs:
+        fatores = log.fatores_usados or {}
+        erro = float(log.erro_percentual or 0)
+        
+        # Get product mix from the log
+        product_mix = fatores.get('_product_mix', [])
+        
+        for prod in product_mix:
+            product_multipliers = prod.get('product_multipliers', {})
+            
+            # For each product factor, bucket by its value range
+            for factor_type in PRODUCT_FACTOR_TYPES:
+                if factor_type in product_multipliers:
+                    value = float(product_multipliers[factor_type])
+                    
+                    # Bucket the value into discrete categories for calibration
+                    if factor_type == 'stock_pressure':
+                        if value <= 0.3:
+                            bucket_key = 'zero_stock'
+                        elif value <= 0.6:
+                            bucket_key = 'critical'
+                        elif value <= 0.9:
+                            bucket_key = 'low'
+                        else:
+                            bucket_key = 'normal'
+                    elif factor_type in ['catalog_boost', 'gold_medal', 'promo_active', 'free_shipping', 'top_sellers']:
+                        # Binary factors
+                        bucket_key = 'active' if value > 1.0 else 'inactive'
+                    elif factor_type == 'visits_trend':
+                        if value < 0.8:
+                            bucket_key = 'down'
+                        elif value > 1.2:
+                            bucket_key = 'up'
+                        else:
+                            bucket_key = 'neutral'
+                    elif factor_type == 'velocity_score':
+                        if value >= 1.1:
+                            bucket_key = 'A'
+                        elif value >= 0.9:
+                            bucket_key = 'B'
+                        else:
+                            bucket_key = 'C'
+                    elif factor_type == 'search_position':
+                        if value >= 1.2:
+                            bucket_key = 'top5'
+                        elif value >= 1.1:
+                            bucket_key = 'top10'
+                        elif value >= 1.0:
+                            bucket_key = 'top20'
+                        else:
+                            bucket_key = 'below20'
+                    else:
+                        # Generic bucketing
+                        if value < 0.9:
+                            bucket_key = 'low'
+                        elif value > 1.1:
+                            bucket_key = 'high'
+                        else:
+                            bucket_key = 'neutral'
+                    
+                    # Initialize if needed
+                    if bucket_key not in factor_errors[factor_type]:
+                        factor_errors[factor_type][bucket_key] = {"errors": [], "count": 0}
+                    
+                    factor_errors[factor_type][bucket_key]["errors"].append(erro)
+                    factor_errors[factor_type][bucket_key]["count"] += 1
+    
+    # Calculate averages
+    for factor_type in factor_errors:
+        for key in factor_errors[factor_type]:
+            errors = factor_errors[factor_type][key]["errors"]
+            factor_errors[factor_type][key]["avg_error"] = sum(errors) / len(errors) if errors else 0
+            del factor_errors[factor_type][key]["errors"]  # Clean up
+    
+    return factor_errors
+
+
+def _apply_product_factor_calibration(
+    db: Session,
+    factor_type: str,
+    factor_key: str,
+    avg_error: float,
+    sample_count: int
+) -> Dict:
+    """
+    Apply a calibration adjustment to a PRODUCT-specific multiplier.
+    Uses the same MultiplierConfig table but with 'product_' prefix on type.
+    """
+    from app.models.forecast_learning import MultiplierConfig, CalibrationHistory
+    
+    # Store product factors with prefix to distinguish from global
+    db_factor_type = f"product_{factor_type}"
+    
+    # Get current multiplier value from config (or default to 1.0)
+    config = db.query(MultiplierConfig).filter(
+        and_(
+            MultiplierConfig.tipo == db_factor_type,
+            MultiplierConfig.chave == factor_key
+        )
+    ).first()
+    
+    # Check if locked - skip calibration if locked
+    if config and getattr(config, 'locked', 'N') == 'Y':
+        logger.debug(f"[FORECAST-JOB] Skipping locked product factor: {db_factor_type}.{factor_key}")
+        return None
+    
+    old_value = float(config.valor) if config else 1.0
+    
+    # Micro-adjustment: max 1% per cycle
+    adjustment_factor = 0.01
+    
+    if avg_error > 5:
+        new_value = old_value * (1 - adjustment_factor)
+    elif avg_error < -5:
+        new_value = old_value * (1 + adjustment_factor)
+    else:
+        return None
+    
+    # Clamp to reasonable range
+    new_value = max(0.3, min(2.0, new_value))
+    
+    # Update or create config
+    if config:
+        config.valor = Decimal(str(round(new_value, 3)))
+        config.calibrado = 'auto'
+        config.confianca = min(100, sample_count)
+    else:
+        config = MultiplierConfig(
+            tipo=db_factor_type,
+            chave=factor_key,
+            valor=Decimal(str(round(new_value, 3))),
+            calibrado='auto',
+            confianca=min(100, sample_count)
+        )
+        db.add(config)
+    
+    # Record in calibration history
+    history = CalibrationHistory(
+        data_calibracao=datetime.utcnow(),
+        tipo_fator=db_factor_type,
+        fator_chave=factor_key,
+        valor_anterior=Decimal(str(round(old_value, 3))),
+        valor_novo=Decimal(str(round(new_value, 3))),
+        erro_medio=Decimal(str(round(avg_error, 2))),
+        amostras=sample_count,
+        ajuste_percentual=Decimal(str(round((new_value / old_value - 1) * 100, 2))),
+        notas=f"Product-factor calibration: {factor_type}.{factor_key} avg_error={avg_error:.1f}%"
+    )
+    db.add(history)
+    
+    logger.info(f"[FORECAST-JOB] Calibrated PRODUCT factor {factor_type}.{factor_key}: {old_value:.3f} -> {new_value:.3f}")
     
     return {
         "factor_type": factor_type,

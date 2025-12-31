@@ -9,7 +9,9 @@ from app.core.database import SessionLocal
 from app.models.ad import Ad
 from app.models.ml_order import MlOrder, MlOrderItem
 from app.models.ml_metrics_daily import MlMetricsDaily
+from app.models.forecast_learning import ForecastLog
 from app.services.meli_api import MeliApiService
+from app.core.constants import STOCK_RISK_WARNING_DAYS
 
 @api_bp.route('/dashboard/metrics', methods=['GET'])
 def get_dashboard_metrics():
@@ -385,7 +387,7 @@ def get_dashboard_metrics():
             if velocity > 0:
                 days_cover = stock / velocity
                 
-            if days_cover < 30: # Risk Threshold
+            if days_cover < STOCK_RISK_WARNING_DAYS: # Risk Threshold
                 stock_risk_count += 1
                 val_at_risk = float(ad.price or 0) * stock
                 stock_risk_value += val_at_risk
@@ -621,6 +623,7 @@ def get_dashboard_metrics():
 
             sales_list.append({
                 "id": o.ml_order_id,
+                "logistic_type": o.shipping_type,
                 "order_id": o.ml_order_id,
                 "date": o.date_created.isoformat() if o.date_created else None,
                 "buyer_name": f"{o.buyer_first_name or ''} {o.buyer_last_name or ''}".strip() or o.buyer_nickname or "Cliente Desconhecido",
@@ -657,41 +660,101 @@ def get_dashboard_metrics():
         profit_trend = 0.0
         try:
              # Fetch previous orders
-             prev_orders = get_orders_in_period(db, prev_start_date_utc, prev_end_date_utc) # Use prev_end_date_utc which is correct
+             prev_orders = get_orders_in_period(db, prev_start_date_utc, prev_end_date_utc)
              
              prev_profit = 0.0
+             
+             # Reuse robust logic for Previous Period to ensure apples-to-apples comparison
              for o in prev_orders:
-                 if o.status == 'paid' or o.status == 'shipped' or o.status == 'delivered':
-                     rev = float(o.total_amount or 0)
-                     cost = 0.0
-                     # Approximate cost for speed (using simple 50% assumption or try to fetch? Let's use same robust logic if fast enough, but cache is local)
-                     # For trend, approximation is often acceptable if cache not hot. 
-                     # Let's try to do it properly but fast.
+                 # 1. Filter Logic (Ghost/Cancelled)
+                 is_ignored = False
+                 if o.ml_order_id in IGNORED_IDS: is_ignored = True
+                 if days_param == '7' and o.ml_order_id == "2000014334785924": is_ignored = True
+                 
+                 is_uncancelled = (days_param == 'current_month' and o.ml_order_id in UNCANCELLED_IDS)
+                 
+                 if is_ignored: continue
+                 
+                 # Determine effective status
+                 is_effective_sale = False
+                 if is_uncancelled:
+                     is_effective_sale = True
+                 elif o.status == 'cancelled':
+                    # Check tags like "not_delivered" to see if it was a "paid then cancelled" scenario?
+                    # The main loop treats 'cancelled' as Revenue + Cancellation.
+                    # Net Margin = Revenue - Cost.
+                    # If Cancelled, Revenue is reversed -> Net 0?
+                    # Line 270: sales_current_sum = curr_gross - curr_cancelled.
+                    # Line 600: margin_val = order_rev - order_cost
+                    # Line 605: calculated_profit += margin_val IF NOT CANCELLED.
+                    
+                    # So for Profit, we IGNORE cancelled orders entirely?
+                    # Yes: "if not is_cancelled: calculated_profit += margin_val"
+                    # So Uncancelled orders ARE included. Normal cancelled are NOT.
+                    pass
+                 elif o.status in ['paid', 'shipped', 'delivered']:
+                     is_effective_sale = True
                      
-                     # Re-use caches if possible, or build quick lookup
-                     
-                     # Simple logic: iterate items
+                 if is_effective_sale:
+                     # Calculate Order Cost (Simplified but consistent with above)
+                     o_rev = float(o.total_amount or 0)
                      o_cost = 0.0
+                     
                      for i in o.items:
                          qty = int(i.quantity or 1)
-                         # Try cache
-                         u_cost = 0.0
+                         unit_price = float(i.unit_price or 0)
+                         
+                         # Cost Logic
                          ad = ads_cache.get(i.ml_item_id)
-                         if ad: u_cost = float(ad.cost or 0)
-                         else:
+                         u_cost = float(ad.cost or 0) if ad else 0.0
+                         
+                         if u_cost == 0:
                              sku_norm = i.sku.strip().upper() if i.sku else ""
                              if sku_norm and sku_norm in tiny_cache:
                                  u_cost = float(tiny_cache[sku_norm].cost or 0)
+                                 
+                         p_cost = u_cost * qty
                          
-                         o_cost += (u_cost * qty)
-                         # Add Tax/Fee approx
-                         o_cost += (float(i.unit_price or 0) * qty * TAX_RATE)
-                         o_cost += (float(i.sale_fee or 0) * qty)
+                         # Tax/Fee/Shipping
+                         t_cost = unit_price * qty * TAX_RATE
+                         f_cost = float(i.sale_fee or 0) * qty
                          
-                     # Shipping
-                     o_cost += float(o.shipping_cost or 0)
-                     
-                     prev_profit += (rev - o_cost)
+                         s_cost = 0.0
+                         order_shipping = float(o.shipping_cost or 0)
+                         if order_shipping > 0:
+                             s_cost = order_shipping / max(1, len(o.items))
+                         elif ad and ad.free_shipping:
+                             s_cost = float(ad.shipping_cost or 0) * qty
+                             
+                         # Ads Cost (Using current period attribution map might be wrong for prev period)
+                         # BUT keeping it 0 for prev period would skew trend positive (Prev Profit higher? No, lower cost -> Higher Profit).
+                         # If we assume similar Ads ratio:
+                         # calculated_profit includes Ads Cost.
+                         # prev_profit should too.
+                         # If we don't have historical ads data easily, maybe approximation?
+                         # Or fetch ads for prev period?
+                         # For speed, let's assume Ads % is similar?
+                         # Or just ignore Ads in BOTH for Trend? No, Profit depends on it.
+                         # Let's try to fetch Ads for prev period if possible, otherwise accept the skew.
+                         # Given complexity, we will omit Ads Cost in Prev Profit if we can't get it easily,
+                         # BUT logic above calculates 'calculated_profit' WITH ads cost.
+                         # If Prev Profit lacks Ads Cost, it will be HIGHER.
+                         # Current Profit (With Ads) vs Prev Profit (No Ads/Higher).
+                         # Current < Prev. Trend Negative.
+                         # User sees -25%. This might be WHY.
+                         
+                         # Attempt to simulate Ads Cost for Prev:
+                         # Use rawAdsValue / Revenue ratio from Current?
+                         # If current ads is 10%, assume prev was 10%.
+                         a_cost = 0.0
+                         # Logic: If we can't fetch real ads for prev, simple ratio is better than 0.
+                         if curr_gross > 0 and revenue_ads > 0:
+                             ads_ratio = ads_cost_7d / curr_gross # Global ratio
+                             a_cost = (unit_price * qty) * ads_ratio
+                         
+                         o_cost += p_cost + t_cost + f_cost + s_cost + a_cost
+                         
+                     prev_profit += (o_rev - o_cost)
 
              if prev_profit > 0:
                  profit_diff = calculated_profit - prev_profit
@@ -769,7 +832,8 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
     curr = start_date
     if is_hourly:
         # Fill hours (only show hours, no dates for Hoje/Ontem)
-        for h in range(0, 24, 2):
+        # Using 1h resolution to match ForecastLog table
+        for h in range(0, 24):
             key = f"{h:02}h"
             chart_data[key] = {
                 "name": key, 
@@ -806,7 +870,7 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
     current_bucket_idx = -1
     
     if is_hourly and start_date == date.today():
-        current_bucket_val = (now_local.hour // 2) * 2
+        current_bucket_val = now_local.hour
     else:
         current_bucket_val = 999 # Past days, everything is "so far"
     
@@ -819,9 +883,9 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
         dt_local = (o.date_closed or o.date_created).replace(tzinfo=timezone.utc).astimezone(tz_obj)
         
         if is_hourly:
-            h = (dt_local.hour // 2) * 2
+            h = dt_local.hour
             key = f"{h:02}h"
-            if is_hourly and start_date == date.today() and h <= current_bucket_val:
+            if is_hourly and h <= current_bucket_val:
                  current_total_so_far += float(o.total_amount or 0)
         else:
             key = dt_local.strftime("%d/%m")
@@ -901,8 +965,8 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
         
         # Map previous date to matched chart key
         if is_hourly:
-            # Same hour, ignore date difference
-            h = (dt_local.hour // 2) * 2
+            # Hourly resolution (1h buckets) matches the log table exactly
+            h = dt_local.hour
             key = f"{h:02}h"
             if is_hourly and start_date == date.today() and h <= current_bucket_val:
                 prev_total_so_far += float(o.total_amount or 0)
@@ -915,23 +979,44 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
         if key in chart_data:
             chart_data[key]["receita_anterior"] += float(o.total_amount or 0)
 
-    # --- Calculate Projection using simple growth factor ---
-    # HyperForecast temporarily disabled for performance
-    # Only for "Hoje" view
-    if is_hourly and start_date == date.today():
-        # Simple growth factor projection (fast)
-        if prev_total_so_far > 0:
-            growth_factor = current_total_so_far / prev_total_so_far
-            growth_factor = min(max(growth_factor, 0.2), 3.0)
-        else:
-            growth_factor = 1.0
+    # --- Calculate Projection using Hyper AI Forecasts ---
+    # Calculate Projection using Hyper AI Forecasts
+    if is_hourly:
+        try:
+            # Fetch actual forecast logs for the day
+            logs = db.query(ForecastLog).filter(
+                func.date(ForecastLog.hora_alvo) == start_date
+            ).order_by(ForecastLog.hora_alvo.asc()).all()
             
-        for h in range(0, 24, 2):
-            key = f"{h:02}h"
-            if h <= current_bucket_val:
-                chart_data[key]["receita_projetada"] = chart_data[key]["receita"]
-            else:
-                chart_data[key]["receita_projetada"] = chart_data[key]["receita_anterior"] * growth_factor
+            # Map logs to buckets (1h intervals)
+            forecast_buckets = {}
+            for log in logs:
+                h = log.hora_alvo.hour
+                key = f"{h:02}h"
+                forecast_buckets[key] = forecast_buckets.get(key, 0.0) + float(log.valor_previsto)
+
+            # Change range to step 1 (0, 24, 1)
+            for h in range(0, 24):
+                key = f"{h:02}h"
+                if key in chart_data:
+                    # Use AI prediction from ForecastLog
+                    if key in forecast_buckets and forecast_buckets[key] > 0:
+                        chart_data[key]["receita_projetada"] = forecast_buckets[key]
+                    else:
+                        # Fallback
+                        if prev_total_so_far > 0:
+                            growth_factor = current_total_so_far / prev_total_so_far
+                            growth_factor = min(max(growth_factor, 0.2), 3.0)
+                        else:
+                            growth_factor = 1.0
+                        chart_data[key]["receita_projetada"] = chart_data[key]["receita_anterior"] * growth_factor
+        except Exception as e:
+            print(f"[ERROR] Dashboard Projection failed: {e}")
+            # Final fallback
+            for h in range(0, 24):
+                key = f"{h:02}h"
+                if key in chart_data:
+                    chart_data[key]["receita_projetada"] = chart_data[key]["receita_anterior"]
 
     return list(chart_data.values())
 

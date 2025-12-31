@@ -575,6 +575,8 @@ def get_forecast_log_detail(log_id: int):
         
         try:
              from datetime import timezone, timedelta
+             from sqlalchemy import and_
+             from app.models.ml_order import MlOrder, MlOrderItem
              
              # --- STRICT TIMEZONE ALIGNMENT (User Requested) ---
              # Logic validated by debug_repro.py to match sales correctly.
@@ -700,9 +702,6 @@ def get_forecast_log_detail(log_id: int):
                       p_copy['accuracy_hit'] = (real_qty > 0 and p.get('units_expected', 0) > 0.1)
                       enhanced_mix.append(p_copy)
                       
-                  # Sort: Show Sales first, then highest prediction
-                  enhanced_mix.sort(key=lambda x: (x.get('realized_units', 0), x.get('units_expected', 0)), reverse=True)
-                  
                   # Update the temporary dict (not saving to DB)
                   fatores['_product_mix'] = enhanced_mix
                   
@@ -2106,6 +2105,7 @@ def get_product_forecasts():
                     {
                         "mlb_id": p.mlb_id,
                         "title": p.title,
+                        "thumbnail": p.thumbnail,
                         "sku": p.sku,
                         "category": p.category_normalized or p.category_ml,
                         "curve": p.curve,
@@ -2118,7 +2118,10 @@ def get_product_forecasts():
                         "total_revenue_7d": float(p.total_revenue_7d or 0),
                         "trend": p.trend,
                         "trend_pct": float(p.trend_pct or 0),
-                        "stock_current": p.stock_current or 0,
+                        "stock_current": p.stock_current,
+                        "stock_full": p.stock_full,
+                        "stock_local": p.stock_local,
+                        "stock_incoming": p.stock_incoming,
                         "days_of_coverage": float(p.days_of_coverage or 0),
                         "stock_status": p.stock_status,
                         "has_rupture_risk": p.has_rupture_risk,

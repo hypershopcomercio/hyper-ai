@@ -200,6 +200,14 @@ class DynamicMultipliers:
         all_mults = self._load_all_multipliers()
         result = {}
         
+        # Helper function to get calibrated value with product_ prefix fallback
+        def get_calibrated(factor_type: str, factor_key: str, default: float) -> float:
+            """Get value from product_<type> first, then fallback to <type>."""
+            product_type = f"product_{factor_type}"
+            if product_type in all_mults and factor_key in all_mults[product_type]:
+                return all_mults[product_type][factor_key]
+            return all_mults.get(factor_type, {}).get(factor_key, default)
+        
         # 1. Stock Pressure (based on days of coverage AND hard stock check)
         stock_current = getattr(product, 'stock_current', 0)
         
@@ -208,76 +216,76 @@ class DynamicMultipliers:
         elif product.days_of_coverage:
             days = float(product.days_of_coverage)
             if days < 3:
-                result['stock_pressure'] = all_mults.get('stock_pressure', {}).get('critical', 0.5)
+                result['stock_pressure'] = get_calibrated('stock_pressure', 'critical', 0.5)
             elif days < 7:
-                result['stock_pressure'] = all_mults.get('stock_pressure', {}).get('low', 0.8)
+                result['stock_pressure'] = get_calibrated('stock_pressure', 'low', 0.8)
             else:
-                result['stock_pressure'] = 1.0
+                result['stock_pressure'] = get_calibrated('stock_pressure', 'normal', 1.0)
         else:
             result['stock_pressure'] = 1.0
         
         # 2. Listing Health (based on product status)
         health = getattr(product, 'listing_health', None)
         if health:
-            result['listing_health'] = all_mults.get('listing_health', {}).get(health, 1.0)
+            result['listing_health'] = get_calibrated('listing_health', health, 1.0)
         else:
-            result['listing_health'] = 1.0
+            result['listing_health'] = get_calibrated('listing_health', 'neutral', 1.0)
         
         # 3. Search Position (if available)
         position = getattr(product, 'search_position', None)
         if position:
             if position <= 5:
-                result['search_position'] = all_mults.get('search_position', {}).get('top5', 1.3)
+                result['search_position'] = get_calibrated('search_position', 'top5', 1.3)
             elif position <= 10:
-                result['search_position'] = all_mults.get('search_position', {}).get('top10', 1.15)
+                result['search_position'] = get_calibrated('search_position', 'top10', 1.15)
             elif position <= 20:
-                result['search_position'] = all_mults.get('search_position', {}).get('top20', 1.0)
+                result['search_position'] = get_calibrated('search_position', 'top20', 1.0)
             else:
-                result['search_position'] = all_mults.get('search_position', {}).get('below20', 0.8)
+                result['search_position'] = get_calibrated('search_position', 'below20', 0.8)
         else:
             result['search_position'] = 1.0
         
         # 4. Free Shipping
         has_free_shipping = getattr(product, 'has_free_shipping', False)
         if has_free_shipping:
-            result['free_shipping'] = all_mults.get('free_shipping', {}).get('active', 1.1)
+            result['free_shipping'] = get_calibrated('free_shipping', 'active', 1.1)
         else:
-            result['free_shipping'] = 1.0
+            result['free_shipping'] = get_calibrated('free_shipping', 'inactive', 1.0)
         
         # 5. Shipping Advantage (FULL, etc)
         shipping_type = getattr(product, 'shipping_type', None)
         if shipping_type:
-            result['shipping_advantage'] = all_mults.get('shipping_advantage', {}).get(shipping_type, 1.0)
+            result['shipping_advantage'] = get_calibrated('shipping_advantage', shipping_type, 1.0)
         else:
             result['shipping_advantage'] = 1.0
         
         # 6. Listing Type (classico, premium, etc)
         listing_type = getattr(product, 'listing_type', None)
         if listing_type:
-            result['listing_type'] = all_mults.get('listing_type', {}).get(listing_type, 1.0)
+            result['listing_type'] = get_calibrated('listing_type', listing_type, 1.0)
         else:
             result['listing_type'] = 1.0
         
         # 7. Gold Medal (selo)
         has_medal = getattr(product, 'gold_medal', False)
         if has_medal:
-            result['gold_medal'] = all_mults.get('gold_medal', {}).get('active', 1.1)
+            result['gold_medal'] = get_calibrated('gold_medal', 'active', 1.1)
         else:
-            result['gold_medal'] = 1.0
+            result['gold_medal'] = get_calibrated('gold_medal', 'inactive', 1.0)
         
         # 8. Catalog Boost
         in_catalog = getattr(product, 'catalog_listing', False)
         if in_catalog:
-            result['catalog_boost'] = all_mults.get('catalog_boost', {}).get('active', 1.15)
+            result['catalog_boost'] = get_calibrated('catalog_boost', 'active', 1.15)
         else:
-            result['catalog_boost'] = 1.0
+            result['catalog_boost'] = get_calibrated('catalog_boost', 'inactive', 1.0)
         
         # 9. Promo Active
         has_promo = getattr(product, 'has_promo', False)
         if has_promo:
-            result['promo_active'] = all_mults.get('promo_active', {}).get('active', 1.2)
+            result['promo_active'] = get_calibrated('promo_active', 'active', 1.2)
         else:
-            result['promo_active'] = 1.0
+            result['promo_active'] = get_calibrated('promo_active', 'inactive', 1.0)
         
         # 10. Visits Trend (based on trend direction)
         trend = getattr(product, 'trend', None)

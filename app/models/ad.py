@@ -69,6 +69,7 @@ class Ad(Base):
     # Stock Control
     stock_tiny = Column(Integer, default=0)
     stock_divergence = Column(Integer, default=0)
+    stock_incoming = Column(Integer, default=0) # Stock in transit/processing (Full)
     
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     created_at = Column(DateTime(timezone=True), server_default=func.now())

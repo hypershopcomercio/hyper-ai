@@ -21,6 +21,7 @@ class ProductForecast(Base):
     mlb_id = Column(String(20), unique=True, nullable=False, index=True)
     sku = Column(String(100), nullable=True, index=True)
     title = Column(String(500))
+    thumbnail = Column(String(500))
     
     # Category
     category_ml = Column(String(100))           # Original ML category code (MLB1839)
@@ -41,6 +42,8 @@ class ProductForecast(Base):
     # Stock info (from Ad or Tiny)
     stock_current = Column(Integer, default=0)
     stock_full = Column(Integer, default=0)     # If using Full
+    stock_local = Column(Integer, default=0)    # From Tiny/Local
+    stock_incoming = Column(Integer, default=0) # Units in transit/processing
     days_of_coverage = Column(Numeric(5, 1))    # stock / avg_units_7d
     stock_status = Column(String(20))           # 'ok', 'low', 'critical', 'stockout'
     
