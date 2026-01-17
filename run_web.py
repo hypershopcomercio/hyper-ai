@@ -79,6 +79,13 @@ if __name__ == "__main__":
             run_weekly_calibration
         )
         
+        # 3. Competitor Intelligence Jobs
+        from app.jobs.competitor_jobs import (
+            run_competitor_metrics_collection,
+            run_impact_analysis,
+            run_threat_score_calculation
+        )
+        
         # Daily prediction generation at 00:00 (generates all 24h for next day)
         scheduler.add_job(func=run_daily_predictions, trigger="cron", hour=0, minute=0)
         
@@ -87,6 +94,36 @@ if __name__ == "__main__":
         
         # Calibration at :10 every hour (learns from recent errors)
         scheduler.add_job(func=run_weekly_calibration, trigger="cron", minute=10)
+        
+        # --- Competitor Intelligence Schedule ---
+        # 1. Coleta de Métricas (Scraper): Todo dia, a cada hora (:15)
+        scheduler.add_job(func=run_competitor_metrics_collection, trigger="cron", minute=15)
+        
+        # 2. Análise de Impacto: Todo dia, a cada hora (:20) - logo após a coleta
+        scheduler.add_job(func=run_impact_analysis, trigger="cron", minute=20)
+        
+        # 3. Threat Score: Diariamente às 03:00 da manhã (analisa o dia anterior completo)
+        scheduler.add_job(func=run_threat_score_calculation, trigger="cron", hour=3, minute=0)
+        
+        # 4. Pricing Strategy Execution: Fridays at 22:00 (Brazil time)
+        from app.jobs.pricing_job import execute_pricing_strategies, retry_failed_adjustments
+        scheduler.add_job(
+            func=execute_pricing_strategies, 
+            trigger="cron", 
+            day_of_week="fri", 
+            hour=22, 
+            minute=0,
+            id="pricing_strategy_friday"
+        )
+        # Retry failed adjustments every hour on Saturdays (day after execution)
+        scheduler.add_job(
+            func=retry_failed_adjustments,
+            trigger="cron",
+            day_of_week="sat",
+            hour="*",
+            minute=30,
+            id="pricing_retry_saturday"
+        )
         
         scheduler.start()
         

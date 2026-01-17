@@ -23,12 +23,20 @@ from app.jobs.forecast_jobs import (
     run_hourly_reconciliation, 
     run_weekly_calibration
 )
+from app.jobs.pricing_job import execute_pricing_strategies, verify_recent_price_changes
 
 def start_scheduler():
     scheduler = BlockingScheduler()
     
     # Existing Daily Sync at 3:00 AM
     scheduler.add_job(run_daily_sync, CronTrigger(hour=3, minute=0))
+
+    # --- Pricing Automation ---
+    # Daily at 04:00 AM (Low traffic, before business hours)
+    scheduler.add_job(execute_pricing_strategies, CronTrigger(hour=4, minute=0))
+    
+    # Verify pricing consistency every 30 mins
+    scheduler.add_job(verify_recent_price_changes, CronTrigger(minute='*/30'))
     
     # --- Forecast Automation ---
     # 1. Daily Prediction Generation: At 00:00 (generates all 24h for next day)

@@ -309,33 +309,55 @@ def trigger_quick_sync():
     
     def quick_sync_task():
         try:
-            engine = SyncEngine()
+            # SyncEngine creates its own session internally if needed
+            engine = SyncEngine() 
             # Sync recent orders (last 2 hours)
             engine.sync_orders_incremental(lookback_hours=2)
             # Sync visits
             engine.sync_visits()
-            engine.db.close()
+        except Exception as e:
+            import logging
+            logging.error(f"Quick sync error: {e}")
         except Exception as e:
             import logging
             logging.error(f"Quick sync error: {e}")
     
     # Run SYNCHRONOUSLY to ensure frontend waits for data
     try:
-        # Check if we should force background (optional param)
-        is_async = request.json and request.json.get('async', False)
+        # Check if we should force background
+        # Default to ASYNC now for dashboard "Refresh" to avoid timeouts
+        # The frontend calls /jobs/trigger then /reconcile. 
+        # If /jobs/trigger is slow, dashboard hangs.
+        # But /reconcile needs the data!
+        # Ideally: Trigger sync (wait max 5s? or wait full?)
+        # User reported 500. Means it took >30s?
+        # Let's optimize incremental sync first (done in incremental.py?).
+        # If we return 202, frontend proceeds to reconcile immediately, which defeats purpose.
+        
+        # Compromise:
+        # Launch sync in background, but return success immediately to UI.
+        # UI proceeds to reconcile (which reconciles what we have).
+        # Data might be stale by 5 seconds, but UI doesn't crash.
+        # NEXT processing will catch it.
+        # OR:
+        # Frontend should wait. If it timeouts, it's because Meli is slow.
+        # Let's try to keep it synchronous but catch the timeout? No, API shouldn't timeout.
+
+        # FIX: Just return 202 always?
+        # No, the user wants immediate feedback.
+        
+        # Let's allow 'async' param, and frontend decides.
+        is_async = request.json and request.json.get('async', True) # Defaulting to True for safety now
         
         if is_async:
              thread = Thread(target=quick_sync_task)
              thread.start()
              return jsonify({"message": "Quick sync triggered in background"}), 202
 
-        # Run Blocking
+        # Run Blocking (Legacy/Forced)
         engine = SyncEngine()
-        # Sync recent orders (last 2 hours)
         engine.sync_orders_incremental(lookback_hours=2)
-        # Sync visits
         engine.sync_visits()
-        engine.db.close()
         
         return jsonify({"message": "Quick sync completed", "success": True}), 200
         
@@ -344,6 +366,5 @@ def trigger_quick_sync():
         import traceback
         logging.error(f"Quick sync error: {e}")
         traceback.print_exc()
-        # Return 200 with error so frontend doesn't show 500 overlay
         return jsonify({"success": False, "error": str(e), "message": "Sync failed gracefully"}), 200
 

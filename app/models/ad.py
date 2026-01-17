@@ -22,9 +22,14 @@ class Ad(Base):
     thumbnail = Column(String)
     pictures = Column(JSON, nullable=True)
     attributes = Column(JSON, nullable=True)
+    video_id = Column(String, nullable=True) # YouTube Video ID
+    short_description = Column(String, nullable=True) # Clips/Summary content
+    manual_video_verified = Column(Boolean, default=False) # Manual override for Clips
     
     # Prices
-    original_price = Column(Float, nullable=True)
+    original_price = Column(Float, nullable=True) # The "DE" price (from Standard API or Prices API)
+    promotion_price = Column(Float, nullable=True) # The "POR" price if different from price/base, or specific active promo
+
     
     # Shipping & Fulfillment
     free_shipping = Column(Boolean, default=False)
@@ -56,6 +61,12 @@ class Ad(Base):
     shipping_cost = Column(Float, default=0.0)
     tax_cost = Column(Float, default=0.0)
     ads_spend_30d = Column(Float, default=0.0)
+    
+    # Margin Defense
+    target_margin = Column(Float, nullable=True) # User defined target (0.15 for 15%)
+    suggested_price = Column(Float, nullable=True) # Calculated price to reach target
+    strategy_start_price = Column(Float, nullable=True) # Price when strategy was activated
+    current_step_number = Column(Integer, default=0) # Current step in the pricing plan (0 = not started)
 
     # Metrics Snapshot
     visits_30d = Column(Integer, default=0)

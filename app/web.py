@@ -24,6 +24,11 @@ from app.jobs.forecast_jobs import (
     run_weekly_calibration,
     run_daily_snapshot
 )
+from app.jobs.competitor_jobs import (
+    run_competitor_metrics_collection,
+    run_impact_analysis,
+    run_threat_score_calculation
+)
 
 scheduler = BackgroundScheduler()
 
@@ -43,8 +48,18 @@ scheduler.add_job(func=run_weekly_calibration, trigger="cron", minute=10, id="ru
 # 4. Daily Snapshot: At 23:55 (saves day's learning metrics)
 scheduler.add_job(func=run_daily_snapshot, trigger="cron", hour=23, minute=55, id="run_daily_snapshot")
 
+# --- Competitor Intelligence Automation ---
+# 5. Hourly Metrics Collection: At :15 (collect competitor metrics)
+scheduler.add_job(func=run_competitor_metrics_collection, trigger="cron", minute=15, id="competitor_metrics_collection")
+
+# 6. Hourly Impact Analysis: At :20 (analyze events and correlations)
+scheduler.add_job(func=run_impact_analysis, trigger="cron", minute=20, id="competitor_impact_analysis")
+
+# 7. Daily Threat Score: At 01:00 (calculate threat scores)
+scheduler.add_job(func=run_threat_score_calculation, trigger="cron", hour=1, minute=0, id="competitor_threat_scores")
+
 scheduler.start()
-logger.info("Scheduler started with Forecast Automation (Hourly at :00, :05, :10 + Daily Snapshot at 23:55)")
+logger.info("Scheduler started: Forecast + Competitor Intelligence (Hourly :05, :10, :15, :20 + Daily 00:00, 01:00, 04:00, 23:55)")
 
 
 

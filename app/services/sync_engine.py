@@ -4,6 +4,7 @@ import datetime
 import time 
 import concurrent.futures
 import sqlalchemy
+from sqlalchemy import and_
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -164,9 +165,15 @@ class SyncEngine:
         ad.thumbnail = item_data.get("thumbnail")
         ad.pictures = item_data.get("pictures") 
         ad.attributes = item_data.get("attributes") 
+        ad.attributes = item_data.get("attributes") 
         ad.video_id = item_data.get("video_id")
+        ad.short_description = item_data.get("short_description", {}).get("content") if isinstance(item_data.get("short_description"), dict) else item_data.get("short_description")
+        # Hyper Sync 2.0: Promotion Logic Removed (Reverted)
+        
+        # Original simple mapping
         ad.price = float(item_data.get("price", 0))
         ad.original_price = float(item_data.get("original_price")) if item_data.get("original_price") else None
+             
         ad.currency_id = item_data.get("currency_id")
         ad.available_quantity = int(item_data.get("available_quantity", 0))
         ad.sold_quantity = int(item_data.get("sold_quantity", 0))
@@ -196,6 +203,58 @@ class SyncEngine:
         if ad.free_shipping:
              ad.shipping_cost = self.meli_service.get_shipping_cost(ad.id, seller_id)
         
+        if ad.is_full:
+            inventory_id = item_data.get("inventory_id")
+            if inventory_id:
+                f_data = self.meli_service.get_fulfillment_stock(inventory_id)
+                if f_data:
+                    # Parse 'transfer' quantity
+                    # "not_available_detail": [{"status": "transfer", "quantity": 135}, ...]
+                    details = f_data.get("not_available_detail", [])
+                    transfer_qty = 0
+                    for d in details:
+                        if d.get("status") == "transfer":
+                            transfer_qty += d.get("quantity", 0)
+                    
+                    ad.stock_incoming = transfer_qty
+        
+        # Sync Costs & Margins (Tiny + Tax + Fixed)
+        try:
+            # 1. Get Configs
+            from app.services.tax_service import TaxService
+            from app.models.system_config import SystemConfig
+            
+            # Tax Rate
+            sc_tax = self.db.query(SystemConfig).filter(SystemConfig.key == 'aliquota_simples').first()
+            if sc_tax:
+                tax_rate = float(sc_tax.value)
+            else:
+                # Fallback to default or calculate if completely missing
+                # To obtain an instance of TaxService, we need to handle its init or use static methods if available
+                # But TaxService.__init__ takes db.
+                ts = TaxService(self.db)
+                tax_rate = ts.update_system_tax_rate()
+            
+            # Fixed Cost
+            sc_fixed = self.db.query(SystemConfig).filter(SystemConfig.key == 'custo_fixo_pedido').first()
+            fixed_cost = float(sc_fixed.value) if sc_fixed else 0.0
+            
+            # Inbound Cost (Full Only)
+            inbound_cost = 0.0
+            if ad.is_full:
+                sc_inbound = self.db.query(SystemConfig).filter(SystemConfig.key == 'avg_inbound_cost').first()
+                inbound_cost = float(sc_inbound.value) if sc_inbound else 0.0
+            
+            # 2. Process Cost & Margin (Links Tiny, updates cost, tax, margin)
+            # This method handles SKU resolution, Tiny linking, Cost update, and Margin Calc
+            self._process_ad_cost(ad, tax_rate, fixed_cost, inbound_cost)
+            
+        except Exception as e:
+            logger.error(f"Error processing costs for ad {ad.id}: {e}")
+            # Fallback for tax to ensure it's not null if process fails
+            if ad.tax_cost is None and ad.price:
+                ad.tax_cost = 0.0
+
         ad.last_updated = datetime.datetime.now()
         ad.updated_at = datetime.datetime.now()
         
@@ -230,7 +289,7 @@ class SyncEngine:
 
     def _fetch_visits_wrapper(self, ad_id):
         try:
-             return self.meli_service.get_visits_time_window(ad_id, last=30, unit="day")
+             return self.meli_service.get_visits_time_window(ad_id, last=120, unit="day")
         except Exception as e:
              logger.error(f"Thread fetch failed for {ad_id}: {e}")
              return None
@@ -274,14 +333,25 @@ class SyncEngine:
                                     self.db.add(visit_rec)
                                 visit_rec.visits = day_data.get("total", 0)
                                 
-                                metric_rec = self.db.query(MlMetricsDaily).filter(MlMetricsDaily.item_id == aid, MlMetricsDaily.date == v_date).first()
-                                if not metric_rec:
-                                    metric_rec = MlMetricsDaily(item_id=aid, date=v_date)
-                                    self.db.add(metric_rec)
-                                metric_rec.visits = day_data.get("total", 0)
+                                # Explicit Upsert for Metrics Daily
+                                existing_metric = self.db.query(MlMetricsDaily).filter(
+                                    MlMetricsDaily.item_id == aid, 
+                                    MlMetricsDaily.date == v_date
+                                ).first()
                                 
-                            total_visits_30d = sum(d.get('total', 0) for d in data['results'])
-                            ad.visits_30d = total_visits_30d
+                                if existing_metric:
+                                    existing_metric.visits = day_data.get("total", 0)
+                                else:
+                                    new_metric = MlMetricsDaily(item_id=aid, date=v_date, visits=day_data.get("total", 0))
+                                    self.db.add(new_metric)
+                                    # self.db.flush() # Optional, but commit handles it
+                                
+                            # Sum all visits from the time window (up to 120 days)
+                            # ML API max is 120 days, so this is the best we can get
+                            total_visits_period = sum(d.get('total', 0) for d in data['results'])
+                            ad.visits_30d = total_visits_period  # Actually represents 120d now
+                            ad.total_visits = total_visits_period  # Keep consistent with UI
+                            
                             ad.visits_last_updated = datetime.datetime.now()
                             success += 1
                         else:
@@ -483,7 +553,7 @@ class SyncEngine:
         # A separate call items/{id}/visits is needed.
         pass
 
-    def _process_ad_cost(self, ad: Ad, tax_rate: float, fixed_cost: float):
+    def _process_ad_cost(self, ad: Ad, tax_rate: float, fixed_cost: float, inbound_cost: float = 0.0):
         # 1. Resolve SKU
         sku = ad.sku.strip() if ad.sku else None
         # If no SKU on ad, try variation (pick first or logic?)
@@ -495,51 +565,50 @@ class SyncEngine:
                 sku = var.sku.strip()
         
         tiny_prod = None
-        if sku:
-
-            # Check Link
-            link = self.db.query(AdTinyLink).filter(AdTinyLink.ad_id == ad.id).first()
-            if link:
-                tiny_prod = self.db.query(TinyProduct).filter(TinyProduct.id == link.tiny_product_id).first()
-                if not tiny_prod:
-                    # Orphan link detected (linked product no longer exists)
-                    logger.warning(f"Orphan AdTinyLink found for Ad {ad.id}. removing link.")
-                    self.db.delete(link)
-                    self.db.flush()
-            
-            # If not linked or orphan, try to find/sync product
+        
+        # 1. Check Link (Manual or Previous Auto-Link) - Check this regardless of SKU presence
+        link = self.db.query(AdTinyLink).filter(AdTinyLink.ad_id == ad.id).first()
+        if link:
+            tiny_prod = self.db.query(TinyProduct).filter(TinyProduct.id == link.tiny_product_id).first()
             if not tiny_prod:
-                # Search locally first
-                tiny_prod = self.db.query(TinyProduct).filter(TinyProduct.sku == sku).first()
-                
-                # If local search failed, Try GTIN local search
-                if not tiny_prod and ad.gtin:
-                     tiny_prod = self.db.query(TinyProduct).filter(TinyProduct.sku == ad.gtin).first()
+                # Orphan link detected (linked product no longer exists)
+                logger.warning(f"Orphan AdTinyLink found for Ad {ad.id}. removing link.")
+                self.db.delete(link)
+                self.db.flush()
+        
+        # 2. If no link, try to find via SKU/GTIN
+        if not tiny_prod and sku:
+             # Search locally first
+             tiny_prod = self.db.query(TinyProduct).filter(TinyProduct.sku == sku).first()
+             
+             # If local search failed, Try GTIN local search
+             if not tiny_prod and ad.gtin:
+                  tiny_prod = self.db.query(TinyProduct).filter(TinyProduct.sku == ad.gtin).first()
 
-                # If still not found, Sync from Tiny API
-                if not tiny_prod:
-                    # Try SKU
-                    logger.info(f"Syncing from Tiny API for SKU: {sku}")
-                    tiny_prod = self._fetch_and_save_tiny(sku)
-                    
-                    # Fallback: Try GTIN if SKU failed
-                    if not tiny_prod and ad.gtin:
-                        logger.info(f"Syncing from Tiny API for GTIN: {ad.gtin}")
-                        tiny_prod = self._fetch_and_save_tiny(ad.gtin)
-                
-                if tiny_prod:
-                    # Create Link if not exists
-                    try:
-                        with self.db.begin_nested():
-                            existing_link = self.db.query(AdTinyLink).filter(AdTinyLink.ad_id == ad.id).first()
-                            if not existing_link:
-                                new_link = AdTinyLink(ad_id=ad.id, tiny_product_id=tiny_prod.id)
-                                self.db.add(new_link)
-                                self.db.flush() 
-                                logger.info(f"Linked Ad {ad.id} to TinyProduct {tiny_prod.id}")
-                    except Exception as e:
-                        logger.error(f"Failed to link Ad {ad.id} to TinyProduct {tiny_prod.id}: {e}")
-                        # Transaction rolled back to savepoint automatically. Session is valid.
+             # If still not found, Sync from Tiny API
+             if not tiny_prod:
+                 # Try SKU
+                 logger.info(f"Syncing from Tiny API for SKU: {sku}")
+                 tiny_prod = self._fetch_and_save_tiny(sku)
+                 
+                 # Fallback: Try GTIN if SKU failed
+                 if not tiny_prod and ad.gtin:
+                     logger.info(f"Syncing from Tiny API for GTIN: {ad.gtin}")
+                     tiny_prod = self._fetch_and_save_tiny(ad.gtin)
+             
+             if tiny_prod:
+                 # Create Link
+                 try:
+                     with self.db.begin_nested():
+                         # Double-check link didn't appear concurrently
+                         existing_link = self.db.query(AdTinyLink).filter(AdTinyLink.ad_id == ad.id).first()
+                         if not existing_link:
+                             new_link = AdTinyLink(ad_id=ad.id, tiny_product_id=tiny_prod.id)
+                             self.db.add(new_link)
+                             self.db.flush() 
+                             logger.info(f"Linked Ad {ad.id} to TinyProduct {tiny_prod.id}")
+                 except Exception as e:
+                     logger.error(f"Failed to link Ad {ad.id} to TinyProduct {tiny_prod.id}: {e}")
 
 
         
@@ -548,7 +617,7 @@ class SyncEngine:
              ad.cost = tiny_prod.cost
 
         # Calculate Margin
-        self.margin_calculator.calculate_margin(ad, tiny_prod, tax_rate, fixed_cost)
+        self.margin_calculator.calculate_margin(ad, tiny_prod, tax_rate, fixed_cost, inbound_cost)
 
     def _fetch_and_save_tiny(self, sku: str):
         # Fetch from API
@@ -636,16 +705,47 @@ class SyncEngine:
             
             # Aggregate Sales First (Orders -> Ads)
             self.metric_processor.aggregate_sales_metrics()
+            # Aggregate Daily Sales (Orders -> Daily Metrics)
+            self.metric_processor.aggregate_daily_sales()
+
             # Calculate Trends (7d changes)
             self.metric_processor.process_all()
             
-            # 4. Process Margins
+            self._log_sync("metrics_processing", "success", start_time=datetime.datetime.now()) # End log
+
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Metrics Processing failed: {e}")
+            self._log_sync("metrics_processing", "error", msg=str(e), start_time=datetime.datetime.now())
+
+        # 4. Process Margins (Now Cleanly Separated)
+        self.sync_margins()
+
+    def sync_margins(self):
+        """
+        Recalculates margins and taxes for all active ads.
+        Indepedent step to ensure tax updates even if metrics fail.
+        """
+        logger.info("Starting Margin Processing...")
+        start_time = datetime.datetime.now()
+        try:
+            from app.services.tax_service import TaxService
+            tax_service = TaxService(db_session=self.db)
+            
+            # Update System Tax Rate based on RBT12
+            tax_service.update_system_tax_rate()
+            
             seller_id = self.get_seller_id()
-            ads = self.db.query(Ad).filter(Ad.status == 'active').all()
+            # Calculate for ALL ads (Active + Paused) to prevent confusion
+            ads = self.db.query(Ad).all()
             
             # Fetch Configurations
-            tax_config = self.db.query(SystemConfig).filter(SystemConfig.key == "tax_das_percent").first()
-            tax_rate = float(tax_config.value) if tax_config and tax_config.value else 0.0
+            tax_config = self.db.query(SystemConfig).filter(
+                and_(SystemConfig.group == 'geral', SystemConfig.key == "aliquota_simples")
+            ).first()
+            
+            # Fallback to 12.5 if not found
+            tax_rate = float(tax_config.value) if tax_config and tax_config.value else 12.5
             
             fixed_pkg_config = self.db.query(SystemConfig).filter(SystemConfig.key == "fixed_packaging_cost").first()
             fixed_pkg = float(fixed_pkg_config.value) if fixed_pkg_config and fixed_pkg_config.value else 0.0
@@ -655,20 +755,23 @@ class SyncEngine:
             
             idx = 0
             for ad in ads:
-                self._process_ad_cost(ad, tax_rate, fixed_pkg)
-                idx += 1
+                try:
+                    self._process_ad_cost(ad, tax_rate, fixed_pkg)
+                    idx += 1
+                except Exception as e_ad:
+                    logger.error(f"Ad {ad.id} calc failed: {e_ad}")
+                
                 if idx % 100 == 0:
                     self.db.commit()
             
             self.db.commit()
-            logger.info("Metrics & Margin Processing completed.")
-            
-            self._log_sync("metrics_processing", "success", start_time=datetime.datetime.now()) # End log
+            logger.info("Margin Processing completed.")
+            self._log_sync("margins", "success", processed=total, success=idx, start_time=start_time)
             
         except Exception as e:
             self.db.rollback()
-            logger.error(f"Metrics Processing failed: {e}")
-            self._log_sync("metrics_processing", "error", msg=str(e), start_time=datetime.datetime.now())
+            logger.error(f"Margin Processing failed: {e}")
+            self._log_sync("margins", "error", msg=str(e), start_time=start_time)
 
     def sync_ads_spend(self):
         pass

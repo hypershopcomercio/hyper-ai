@@ -92,27 +92,48 @@ class MeliSyncService:
                 
                 # Fetch details for batch
                 item_ids = ",".join(results)
-                print(f"DEBUG: item_ids len: {len(item_ids)}, content (partial): {item_ids[:50]}...")
+                
                 items_res = requests.get(f"{self.base_url}/items?ids={item_ids}", headers=headers)
                 
                 if items_res.status_code != 200:
                     logger.error(f"Failed to fetch items details: {items_res.status_code} - {items_res.text}")
-                    # If batch fails, skip this batch but trying to continue scroll might be risky if scroll_id depends on success? 
-                    # Actually scroll_id comes from search, so we can continue.
                     errors += len(results)
                 else:
                     items_data = items_res.json()
                     
                     if isinstance(items_data, list):
+                        # 1. Collect Valid IDs & Items
+                        valid_items = []
+                        valid_ids = []
                         for item_wrapper in items_data:
                             if isinstance(item_wrapper, dict) and item_wrapper.get("code") == 200:
-                                item = item_wrapper["body"]
-                                self._upsert_ad(db, item)
-                                print(f"Item salvo: {item.get('id')} - {item.get('title')}")
-                                total_synced += 1
+                                valid_items.append(item_wrapper["body"])
+                                valid_ids.append(item_wrapper["body"]["id"])
                             else:
                                 print(f"Erro item individual: {item_wrapper}")
                                 errors += 1
+                        
+                        # 2. Fetch Visits (Individual - API limit is 1)
+                        visits_map = {}
+                        if valid_ids:
+                            for vid in valid_ids:
+                                try:
+                                    visits_url = f"{self.base_url}/visits/items?ids={vid}"
+                                    visits_res = requests.get(visits_url, headers=headers)
+                                    if visits_res.status_code == 200:
+                                        v_data = visits_res.json()
+                                        visits_map.update(v_data) 
+                                    elif visits_res.status_code == 429:
+                                        time.sleep(0.5) # Short backoff
+                                except Exception:
+                                    pass
+
+                        # 3. Upsert with Visits
+                        for item in valid_items:
+                            visits = visits_map.get(item["id"], 0)
+                            self._upsert_ad(db, item, visits_total=visits)
+                            print(f"Item salvo: {item.get('id')} - {item.get('title')} (Visits: {visits})")
+                            total_synced += 1
                     else:
                         print(f"CRITICAL: /items returned non-list: {items_data}")
                         errors += len(results)
@@ -146,7 +167,17 @@ class MeliSyncService:
             res.raise_for_status()
             item = res.json()
             
-            ad = self._upsert_ad(db, item)
+            # Fetch Visits
+            visits = 0
+            try:
+                v_res = requests.get(f"{self.base_url}/visits/items?ids={ml_id}", headers=headers)
+                if v_res.status_code == 200:
+                    v_data = v_res.json()
+                    visits = v_data.get(ml_id, 0)
+            except Exception as e_vis:
+                logger.warning(f"Single sync visits error: {e_vis}")
+            
+            ad = self._upsert_ad(db, item, visits_total=visits)
             self._log(db, "INFO", f"Synced single listing {ml_id}")
             return ad
         except Exception as e:
@@ -155,7 +186,7 @@ class MeliSyncService:
         finally:
             db.close()
 
-    def _upsert_ad(self, db, item):
+    def _upsert_ad(self, db, item, visits_total=0):
         # Extract fields
         ml_id = item["id"]
         
@@ -171,7 +202,9 @@ class MeliSyncService:
             "listing_type_id": item["listing_type_id"],
             "permalink": item["permalink"],
             "thumbnail": item["thumbnail"],
-            "updated_at": datetime.now()
+            "updated_at": datetime.now(),
+            "total_visits": visits_total, # Added visits
+            "start_time": item.get("start_time"), # Added details
         }
         
         # SKU
@@ -189,6 +222,7 @@ class MeliSyncService:
         shipping = item.get("shipping", {})
         data["is_full"] = shipping.get("logistic_type") == "fulfillment"
         data["free_shipping"] = shipping.get("free_shipping", False)
+        data["shipping_mode"] = shipping.get("mode") # Added shipping mode (me2, etc)
         
         # Other
         data["is_catalog"] = item.get("catalog_listing", False)
@@ -259,4 +293,3 @@ class MeliSyncService:
                 set_={k: v for k, v in v_data.items() if k != "id"}
             )
             db.execute(stmt)
-

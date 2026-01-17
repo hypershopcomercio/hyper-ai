@@ -177,102 +177,134 @@ def run_hourly_reconciliation(target_date=None):
         if not logs_to_process:
             logger.info("[FORECAST-JOB] No pending logs to reconcile")
             return {"status": "ok", "reconciled": 0, "updated": 0}
-        
+            
+        # 0. SAFETY: Remove Duplicates for the period to prevent double-counting
+        # This fixes "values are wrong" issue
+        try:
+            hour_counts = {}
+            for l in logs_to_process:
+                h = l.hora_alvo
+                if h not in hour_counts: hour_counts[h] = []
+                hour_counts[h].append(l)
+            
+            duplicates_removed = 0
+            for h, group in hour_counts.items():
+                if len(group) > 1:
+                    # Keep the one with highest ID (newest) that has value, or just highest ID
+                    group.sort(key=lambda x: (x.valor_real is not None, x.id), reverse=True)
+                    keeper = group[0]
+                    for remover in group[1:]:
+                        db.delete(remover)
+                        duplicates_removed += 1
+                        # Remove from processing list
+                        if remover in logs_to_process: 
+                            logs_to_process.remove(remover)
+            
+            if duplicates_removed > 0:
+                logger.info(f"[FORECAST-JOB] Auto-removed {duplicates_removed} duplicate logs")
+                db.commit() # Commit deletion before processing
+        except Exception as e_dup:
+            logger.error(f"[FORECAST-JOB] Duplicate cleanup failed (non-fatal): {e_dup}")
+
         logger.info(f"[FORECAST-JOB] Reconciling {len(logs_to_process)} pending hours from last 30 days")
         
         reconciled_count = 0
         updated_count = 0
         
         for log in logs_to_process:
-            hour_start = log.hora_alvo
-            hour_end = hour_start + timedelta(hours=1)
-            
-            # Convert local time (Brasilia UTC-3) to UTC for database query
-            hour_start_local = hour_start.replace(tzinfo=tz_br)
-            hour_end_local = hour_end.replace(tzinfo=tz_br)
-            
-            hour_start_utc = hour_start_local.astimezone(timezone.utc).replace(tzinfo=None)
-            hour_end_utc = hour_end_local.astimezone(timezone.utc).replace(tzinfo=None)
-
-            actual_revenue = db.query(func.sum(MlOrder.total_amount)).filter(
-                and_(
-                    MlOrder.date_closed >= hour_start_utc,
-                    MlOrder.date_closed < hour_end_utc,
-                    MlOrder.status.in_(['paid', 'shipped', 'delivered'])
-                )
-            ).scalar()
-            
-            actual_revenue = float(actual_revenue or 0)
-            
-            logger.info(f"[DEBUG-RECONCILE] Processing {log.hora_alvo} | UTC Query: {hour_start_utc} to {hour_end_utc} | Revenue Found: {actual_revenue}")
-            predicted = float(log.valor_previsto or 0)
-            old_real = float(log.valor_real or 0)
-            
-            # Calculate error percentage
-            if actual_revenue > 0:
-                erro = ((predicted - actual_revenue) / actual_revenue) * 100
-            else:
-                erro = 0 if predicted == 0 else 100
-            
-            # Check if value changed (late sale arrived) or was previously empty
-            was_empty = old_real == 0 and log.valor_real is None
-            was_updated = not was_empty and abs(actual_revenue - old_real) > 0.01
-            
-            # DEEP RECONCILIATION: Update Product Mix with Real Sales
-            # ---------------------------------------------------------
-            if log.fatores_usados and '_product_mix' in log.fatores_usados:
-                try:
-                    # Query sold items details grouped by ID
-                    sold_items = db.query(
-                        MlOrderItem.ml_item_id,
-                        func.sum(MlOrderItem.quantity).label('qty'),
-                        func.sum(MlOrderItem.unit_price * MlOrderItem.quantity).label('rev')
-                    ).join(MlOrder).filter(
-                        and_(
-                            MlOrder.date_closed >= hour_start_utc,
-                            MlOrder.date_closed < hour_end_utc,
-                            MlOrder.status.in_(['paid', 'shipped', 'delivered'])
-                        )
-                    ).group_by(MlOrderItem.ml_item_id).all()
-                    
-                    # Create map
-                    sold_map = {item.ml_item_id: {'qty': int(item.qty), 'rev': float(item.rev)} for item in sold_items}
-                    
-                    # Update mix
-                    # Make a deep copy to ensure sqlalchemy tracks change
-                    factors_copy = dict(log.fatores_usados)
-                    mix = factors_copy['_product_mix']
-                    
-                    updated = False
-                    for p in mix:
-                        # Try matching by mlb_id (standard) or id
-                        pid = p.get('mlb_id') or p.get('product_id') or p.get('id')
+            try:
+                hour_start = log.hora_alvo
+                hour_end = hour_start + timedelta(hours=1)
+                
+                # Convert local time (Brasilia UTC-3) to UTC for database query
+                hour_start_local = hour_start.replace(tzinfo=tz_br)
+                hour_end_local = hour_end.replace(tzinfo=tz_br)
+                
+                hour_start_utc = hour_start_local.astimezone(timezone.utc).replace(tzinfo=None)
+                hour_end_utc = hour_end_local.astimezone(timezone.utc).replace(tzinfo=None)
+    
+                actual_revenue = db.query(func.sum(MlOrder.total_amount)).filter(
+                    and_(
+                        MlOrder.date_closed >= hour_start_utc,
+                        MlOrder.date_closed < hour_end_utc,
+                        MlOrder.status.in_(['paid', 'shipped', 'delivered'])
+                    )
+                ).scalar()
+                
+                actual_revenue = float(actual_revenue or 0)
+                
+                logger.debug(f"[DEBUG-RECONCILE] Processing {log.hora_alvo} | Revenue: {actual_revenue}")
+                predicted = float(log.valor_previsto or 0)
+                old_real = float(log.valor_real or 0)
+                
+                # Calculate error percentage
+                if actual_revenue > 0:
+                    erro = ((predicted - actual_revenue) / actual_revenue) * 100
+                else:
+                    erro = 0 if predicted == 0 else 100
+                
+                # Check if value changed (late sale arrived) or was previously empty
+                was_empty = old_real == 0 and log.valor_real is None
+                was_updated = not was_empty and abs(actual_revenue - old_real) > 0.01
+                
+                # DEEP RECONCILIATION: Update Product Mix with Real Sales
+                # ---------------------------------------------------------
+                if log.fatores_usados and '_product_mix' in log.fatores_usados:
+                    try:
+                        # Query sold items details grouped by ID
+                        sold_items = db.query(
+                            MlOrderItem.ml_item_id,
+                            func.sum(MlOrderItem.quantity).label('qty'),
+                            func.sum(MlOrderItem.unit_price * MlOrderItem.quantity).label('rev')
+                        ).join(MlOrder).filter(
+                            and_(
+                                MlOrder.date_closed >= hour_start_utc,
+                                MlOrder.date_closed < hour_end_utc,
+                                MlOrder.status.in_(['paid', 'shipped', 'delivered'])
+                            )
+                        ).group_by(MlOrderItem.ml_item_id).all()
                         
-                        if pid and pid in sold_map:
-                            p['realized_units'] = sold_map[pid]['qty']
-                            p['realized_revenue'] = sold_map[pid]['rev']
-                            updated = True
-                        else:
-                            # Explicitly set to 0 if no match (to clear previous syncs/nulls)
-                            if 'realized_units' not in p or p['realized_units'] != 0:
-                                p['realized_units'] = 0
-                                p['realized_revenue'] = 0.0
+                        # Create map
+                        sold_map = {item.ml_item_id: {'qty': int(item.qty), 'rev': float(item.rev)} for item in sold_items}
+                        
+                        # Update mix
+                        # Make a deep copy to ensure sqlalchemy tracks change
+                        factors_copy = dict(log.fatores_usados)
+                        mix = factors_copy['_product_mix']
+                        
+                        updated = False
+                        for p in mix:
+                            # Try matching by mlb_id (standard) or id
+                            pid = p.get('mlb_id') or p.get('product_id') or p.get('id')
+                            
+                            if pid and pid in sold_map:
+                                p['realized_units'] = sold_map[pid]['qty']
+                                p['realized_revenue'] = sold_map[pid]['rev']
                                 updated = True
-                    
-                    if updated:
-                        log.fatores_usados = factors_copy
+                            else:
+                                # Explicitly set to 0 if no match (to clear previous syncs/nulls)
+                                if 'realized_units' not in p or p['realized_units'] != 0:
+                                    p['realized_units'] = 0
+                                    p['realized_revenue'] = 0.0
+                                    updated = True
                         
-                except Exception as deep_err:
-                    logger.warning(f"[FORECAST-JOB] Deep reconciliation failed for log {log.id}: {deep_err}")
-
-            # Update the log
-            log.valor_real = Decimal(str(round(actual_revenue, 2)))
-            log.erro_percentual = Decimal(str(round(erro, 2)))
-            
-            reconciled_count += 1
-            if was_updated:
-                updated_count += 1
-                logger.debug(f"[FORECAST-JOB] Updated {log.hora_alvo}: R${old_real:.2f} -> R${actual_revenue:.2f}")
+                        if updated:
+                            log.fatores_usados = factors_copy
+                            
+                    except Exception as deep_err:
+                        logger.warning(f"[FORECAST-JOB] Deep reconciliation failed for log {log.id}: {deep_err}")
+    
+                # Update the log
+                log.valor_real = Decimal(str(round(actual_revenue, 2)))
+                log.erro_percentual = Decimal(str(round(erro, 2)))
+                
+                reconciled_count += 1
+                if was_updated:
+                    updated_count += 1
+                    
+            except Exception as e_log:
+                logger.error(f"[FORECAST-JOB] Failed to reconcile log {log.id} ({log.hora_alvo}): {e_log}")
+                continue # Continue to next log, do not crash batch
         
         db.commit()
         logger.info(f"[FORECAST-JOB] Reconciliation complete: {reconciled_count} new, {updated_count} updated")
@@ -282,7 +314,7 @@ def run_hourly_reconciliation(target_date=None):
              # Calculate average error for the summary
              total_abs_error = 0
              count = 0
-             for log in logs_to_process:  # Fixed: correct variable name
+             for log in logs_to_process:
                  if log.valor_real is not None: # only reconciled ones
                     total_abs_error += abs(float(log.erro_percentual or 0))
                     count += 1
@@ -305,7 +337,7 @@ def run_hourly_reconciliation(target_date=None):
              db.add(sys_log)
              db.commit()
         except Exception as e_log:
-            logger.error(f"Failed to write system log: {e_log}")
+             logger.error(f"Failed to write system log: {e_log}")
 
         return {
             "status": "ok", 

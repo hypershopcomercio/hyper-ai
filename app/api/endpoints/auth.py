@@ -65,13 +65,58 @@ def get_auth_url():
     url = auth_service.get_auth_url()
     return redirect(url)
 
-@api_bp.route('/auth/ml/callback', methods=['POST'])
+@api_bp.route('/auth/ml/callback', methods=['GET', 'POST'])
 def handle_callback():
-    """Handles callback from frontend (which got code from ML)"""
+    """Handles callback from ML (GET redirect) or frontend (POST with code)"""
     logger.info("=== ML CALLBACK RECEIVED ===")
     
+    # Handle GET (direct redirect from ML)
+    if request.method == 'GET':
+        code = request.args.get('code')
+        if not code:
+            return "<h1>Erro</h1><p>Código não recebido do Mercado Livre</p>", 400
+        
+        logger.info(f"GET callback - Code received: {code[:20]}...")
+        
+        try:
+            token_data = auth_service.exchange_code_for_token(code)
+            logger.info(f"Token exchange successful. User ID: {token_data.get('user_id')}")
+            
+            auth_service.save_tokens(token_data)
+            logger.info("Tokens saved successfully!")
+            
+            # Return success HTML page
+            return """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Autenticação Concluída</title>
+                <style>
+                    body { font-family: system-ui; background: linear-gradient(135deg, #1a1c2e, #12141e); color: white; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+                    .card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 48px; text-align: center; max-width: 400px; }
+                    .icon { width: 64px; height: 64px; background: linear-gradient(135deg, #10b981, #059669); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 24px; font-size: 32px; }
+                    h1 { margin: 0 0 8px; font-size: 24px; }
+                    p { color: #94a3b8; margin: 0 0 24px; }
+                    a { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; text-decoration: none; padding: 12px 32px; border-radius: 8px; font-weight: 600; display: inline-block; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <div class="icon">✓</div>
+                    <h1>Autenticação Concluída!</h1>
+                    <p>Sua conta do Mercado Livre foi conectada com sucesso.</p>
+                    <a href="http://localhost:3000">Voltar ao Sistema</a>
+                </div>
+            </body>
+            </html>
+            """
+        except Exception as e:
+            logger.error(f"Callback error: {e}", exc_info=True)
+            return f"<h1>Erro</h1><p>{str(e)}</p>", 500
+    
+    # Handle POST (from frontend)
     data = request.json
-    logger.info(f"Request data: {data}")
+    logger.info(f"POST callback - Request data: {data}")
     
     code = data.get('code') if data else None
     if not code:
@@ -195,3 +240,83 @@ def verify_auth():
             "role": payload.get("role")
         }
     })
+
+
+@api_bp.route('/auth/profile', methods=['PUT'])
+@require_auth
+def update_profile():
+    """Update user profile (name)"""
+    from app.models.user import User
+    
+    db = SessionLocal()
+    try:
+        data = request.get_json()
+        name = data.get('name', '').strip()
+        
+        if not name:
+            return jsonify({"success": False, "error": "Nome não pode estar vazio"}), 400
+        
+        user = db.query(User).filter(User.id == request.user_id).first()
+        if not user:
+            return jsonify({"success": False, "error": "Usuário não encontrado"}), 404
+        
+        user.name = name
+        db.commit()
+        
+        return jsonify({
+            "success": True,
+            "data": {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "role": user.role
+            }
+        })
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Profile update error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        db.close()
+
+
+@api_bp.route('/auth/password', methods=['PUT'])
+@require_auth
+def change_password():
+    """Change user password"""
+    from app.models.user import User
+    
+    db = SessionLocal()
+    try:
+        data = request.get_json()
+        current_password = data.get('current_password', '')
+        new_password = data.get('new_password', '')
+        
+        if not current_password or not new_password:
+            return jsonify({"success": False, "error": "Preencha todos os campos"}), 400
+        
+        if len(new_password) < 6:
+            return jsonify({"success": False, "error": "A nova senha deve ter pelo menos 6 caracteres"}), 400
+        
+        user = db.query(User).filter(User.id == request.user_id).first()
+        if not user:
+            return jsonify({"success": False, "error": "Usuário não encontrado"}), 404
+        
+        # Verify current password
+        if not user.verify_password(current_password):
+            return jsonify({"success": False, "error": "Senha atual incorreta"}), 401
+        
+        # Update password
+        user.password_hash = User.hash_password(new_password)
+        db.commit()
+        
+        return jsonify({"success": True, "message": "Senha alterada com sucesso"})
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Password change error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        db.close()
+

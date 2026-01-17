@@ -255,7 +255,7 @@ def get_dashboard_metrics():
                 curr_gross += val
                 curr_cancelled += val
                 sales_count_current += 1 # Count it as a sale transaction
-                valid_orders_for_pareto.append(o) # Maybe?
+                # NÃO adicionar ao Pareto - cancelados não devem aparecer
             
             elif o.status == 'paid':
                 curr_gross += val
@@ -330,6 +330,7 @@ def get_dashboard_metrics():
         item_qty_map = {}
         
         for o in valid_orders_for_pareto:
+            # Apenas pedidos válidos (paid/shipped/delivered) - cancelados não estão na lista
             for item in o.items:
                 # Use unit_price * quantity
                 rev = float(item.unit_price or 0) * (item.quantity or 0)

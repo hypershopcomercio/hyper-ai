@@ -166,19 +166,88 @@ class MeliApiService:
                  logger.error(f"Error fetching chunk: {response.status_code}")
         return all_details
 
-    def get_visits_time_window(self, item_id: str, last: int = 30, unit: str = "day"):
-        # GET /items/{item_id}/visits/time_window?last=30&unit=day (Hypothetical endpoint per user request)
-        # Note: Standard API is /items/{id}/visits/time_window?last=X&unit=day
+    def get_visits_time_window(self, item_id: str, last: int = 30, unit: str = "day", ending: str = None):
+        """
+        Fetch visits for a specific time window.
+        ending: Optional 'YYYY-MM-DD'. If not provided, defaults to today/now.
+        """
         url = f"{self.base_url}/items/{item_id}/visits/time_window"
         params = {"last": last, "unit": unit}
+        if ending:
+            params["ending"] = ending
+            
         try:
-             response = requests.get(url, params=params, headers=self.get_headers())
+             response = requests.get(url, params=params, headers=self.get_headers(), timeout=10)
              if response.status_code == 200:
                  return response.json()
              return None
         except Exception as e:
              logger.error(f"Error fetching visits time window for {item_id}: {e}")
              return None
+
+    def get_total_visits(self, item_id: str):
+        """
+        Fetches the total lifetime visits for an item.
+        Uses /items/{id} endpoint which usually contains 'total_visits' or similar field?
+        Actually, the standard /items/{id} doesn't expose 'visits' easily.
+        Reliable way: /items/{id}/visits which typically returns total.
+        """
+        url = f"{self.base_url}/items/{item_id}/visits"
+        try:
+            response = requests.get(url, headers=self.get_headers(), timeout=10)
+            if response.status_code == 200:
+                # Structure: {"item_id": "...", "total_visits": 1234, ...}
+                data = response.json()
+                return data.get("total_visits", 0)
+            return 0
+        except Exception as e:
+            logger.error(f"Error fetching total visits for {item_id}: {e}")
+            return 0
+
+    def get_item_pricing(self, item_id: str):
+        """
+        Fetches detailed pricing info to find active promotions.
+        Returns: { "original_price": float|None, "promotion_price": float|None, "price": float }
+        """
+        url = f"{self.base_url}/items/{item_id}/prices"
+        try:
+            response = requests.get(url, headers=self.get_headers(), timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                prices = data.get("prices", [])
+                
+                # Logic to find "De/Por"
+                # Usually:
+                # 'standard' price is the 'original_price' if a promotion is active
+                # 'promotion' price is the current selling price
+                
+                standard = next((p for p in prices if p.get("type") == "standard"), None)
+                promotion = next((p for p in prices if p.get("type") == "promotion"), None)
+                
+                res = {
+                    "original_price": None,
+                    "promotion_price": None,
+                    "price": None
+                }
+                
+                if standard:
+                    res["price"] = standard.get("amount") # Default fallback
+                    
+                if promotion:
+                    # Active promotion
+                    # Check dates? Meli usually returns valid ones or logic in backend handles it.
+                    # We assume returned promotion is relevant.
+                    res["promotion_price"] = promotion.get("amount")
+                    res["original_price"] = promotion.get("regular_amount") # This is often the "De" price
+                    if not res["original_price"] and standard:
+                         # Fallback: if regular_amount is missing, use standard price
+                         res["original_price"] = standard.get("amount")
+                
+                return res
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching pricing for {item_id}: {e}")
+            return None
 
     def get_orders(self, seller_id: str, item_id: str = None, date_from: str = None, date_to: str = None):
         """
@@ -465,3 +534,77 @@ class MeliApiService:
         # Log error
         # logger.warning(f"Visits fetch failed for {item_id}: {resp.status_code}")
         return None
+
+    def get_fulfillment_stock(self, inventory_id: str):
+        """
+        Fetch detailed fulfillment stock, including 'transfer' (incoming) status.
+        Endpoint: /inventories/{inventory_id}/stock/fulfillment
+        """
+        url = f"{self.base_url}/inventories/{inventory_id}/stock/fulfillment"
+        try:
+             resp = requests.get(url, headers=self.get_headers(), timeout=15)
+             if resp.status_code == 200:
+                 return resp.json()
+             elif resp.status_code in [404, 400]:
+                 # Inventory ID might be invalid or not Full
+                 return None
+             else:
+                 logger.warning(f"Fulfillment stock fetch failed for {inventory_id}: {resp.status_code}")
+                 return None
+        except Exception as e:
+             logger.error(f"Error fetching fulfillment stock for {inventory_id}: {e}")
+             return None
+
+    def update_item_price(self, item_id: str, new_price: float) -> dict:
+        """
+        Updates the price of an item on Mercado Livre.
+        
+        Args:
+            item_id: The MLB item ID (e.g., 'MLB1234567890')
+            new_price: The new price in BRL
+            
+        Returns:
+            dict with 'success': bool, 'old_price': float|None, 'new_price': float, 'error': str|None
+        """
+        result = {
+            "success": False,
+            "old_price": None,
+            "new_price": new_price,
+            "error": None
+        }
+        
+        try:
+            # First, get current price for backup
+            current_resp = self.request("GET", f"/items/{item_id}")
+            if current_resp and current_resp.status_code == 200:
+                current_data = current_resp.json()
+                result["old_price"] = current_data.get("price")
+            
+            # Update the price
+            update_resp = self.request("PUT", f"/items/{item_id}", json_data={"price": new_price})
+            
+            if update_resp.status_code == 200:
+                result["success"] = True
+                logger.info(f"Price updated for {item_id}: {result['old_price']} -> {new_price}")
+            else:
+                # Parse error for better message
+                try:
+                    error_data = update_resp.json()
+                    causes = error_data.get("cause", [])
+                    if causes:
+                        cause_msgs = [f"{c.get('code', 'unknown')}: {c.get('message', c.get('type', ''))}" for c in causes]
+                        error_msg = f"ML Error: {'; '.join(cause_msgs)}"
+                    else:
+                        error_msg = error_data.get("message", update_resp.text[:200])
+                except:
+                    error_msg = f"API returned {update_resp.status_code}: {update_resp.text[:200]}"
+                
+                result["error"] = error_msg
+                logger.error(f"Failed to update price for {item_id}: {error_msg}")
+                
+        except Exception as e:
+            result["error"] = str(e)
+            logger.error(f"Exception updating price for {item_id}: {e}")
+            
+        return result
+

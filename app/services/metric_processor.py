@@ -139,6 +139,7 @@ class MetricProcessor:
                 func.sum(MlOrderItem.quantity)
             ).join(MlOrder, MlOrder.ml_order_id == MlOrderItem.ml_order_id)\
              .filter(MlOrder.date_created >= start_date)\
+             .filter(MlOrder.status != 'cancelled')\
              .group_by(MlOrderItem.ml_item_id)\
              .all()
              
@@ -157,4 +158,55 @@ class MetricProcessor:
             
         except Exception as e:
             logger.error(f"Failed to aggregate sales metrics: {e}")
+            self.db.rollback()
+
+    def aggregate_daily_sales(self):
+        """
+        Aggregates daily sales from MlOrders into MlMetricsDaily.
+        Excludes cancelled orders.
+        """
+        logger.info("Aggregating Daily Sales Metrics from Orders...")
+        try:
+            # We will process last 400 days to match the max history window we support
+            today = datetime.date.today()
+            start_date = today - datetime.timedelta(days=400)
+            
+            # Query: ItemID, Date, Sum(Quantity), Sum(Price)
+            from app.models.ml_order import MlOrder, MlOrderItem
+            from sqlalchemy import cast, Date
+            
+            results = self.db.query(
+                MlOrderItem.ml_item_id,
+                cast(MlOrder.date_created, Date).label("sale_date"),
+                func.sum(MlOrderItem.quantity).label("total_qty"),
+                func.sum(MlOrderItem.unit_price * MlOrderItem.quantity).label("total_revenue")
+            ).join(MlOrder, MlOrder.ml_order_id == MlOrderItem.ml_order_id)\
+             .filter(MlOrder.date_created >= start_date)\
+             .filter(MlOrder.status != 'cancelled')\
+             .group_by(MlOrderItem.ml_item_id, cast(MlOrder.date_created, Date))\
+             .all()
+             
+            # Upsert into MlMetricsDaily
+            count = 0
+            for item_id, sale_date, total_qty, total_rev in results:
+                if not sale_date: continue
+                
+                metric = self.db.query(MlMetricsDaily).filter(
+                    MlMetricsDaily.item_id == item_id,
+                    MlMetricsDaily.date == sale_date
+                ).first()
+                
+                if not metric:
+                    metric = MlMetricsDaily(item_id=item_id, date=sale_date)
+                    self.db.add(metric)
+                
+                metric.sales_qty = int(total_qty)
+                metric.sales_revenue = float(total_rev)
+                count += 1
+            
+            self.db.commit()
+            logger.info(f"Updated Daily Metrics for {count} entries.")
+            
+        except Exception as e:
+            logger.error(f"Failed to aggregate daily sales: {e}")
             self.db.rollback()

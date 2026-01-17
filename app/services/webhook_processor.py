@@ -308,11 +308,13 @@ class WebhookProcessor:
                     )
                     
                     if visits_data and isinstance(visits_data, list):
+                        total_visits_sum = 0
                         for visit_entry in visits_data:
                             visit_date = visit_entry.get('date')
                             if visit_date:
                                 visit_date_obj = date.fromisoformat(visit_date[:10])
                                 total_visits = visit_entry.get('total', 0)
+                                total_visits_sum += total_visits
                                 
                                 # Upsert to ml_metrics_daily
                                 existing = db.query(MlMetricsDaily).filter(
@@ -330,6 +332,12 @@ class WebhookProcessor:
                                         sales_qty=0
                                     )
                                     db.add(new_metric)
+                        
+                        # Update Ad.total_visits with the sum from the time window
+                        # This keeps the total fresh, matching how sales are updated
+                        item.visits_30d = total_visits_sum
+                        item.total_visits = total_visits_sum  # Keep total_visits fresh for UI
+                        item.visits_last_updated = datetime.now()
                     
                 except Exception as item_err:
                     logger.debug(f"[WEBHOOK_PROCESSOR] Visits sync error for {item.id}: {item_err}")

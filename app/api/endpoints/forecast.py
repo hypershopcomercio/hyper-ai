@@ -748,6 +748,70 @@ def get_forecast_log_detail(log_id: int):
         db.close()
 
 
+@api_bp.route('/forecast/learning/logs/<int:log_id>', methods=['DELETE'])
+def delete_forecast_log(log_id: int):
+    """
+    Delete a forecast log
+    """
+    from app.models.forecast_learning import ForecastLog
+    db = SessionLocal()
+    try:
+        log = db.query(ForecastLog).filter(ForecastLog.id == log_id).first()
+        if not log:
+            return jsonify({"success": False, "error": "Log not found"}), 404
+            
+        db.delete(log)
+        db.commit()
+        return jsonify({"success": True, "message": "Log deleted"})
+    except Exception as e:
+        db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        db.close()
+
+
+@api_bp.route('/forecast/learning/logs/<int:log_id>/regenerate', methods=['POST'])
+def regenerate_forecast_log(log_id: int):
+    """
+    Regenerate a forecast log (re-run prediction for that hour)
+    """
+    from app.models.forecast_learning import ForecastLog
+    from app.services.forecast import HyperForecast
+    
+    db = SessionLocal()
+    try:
+        log = db.query(ForecastLog).filter(ForecastLog.id == log_id).first()
+        if not log:
+            return jsonify({"success": False, "error": "Log not found"}), 404
+            
+        # Capture timestamp info
+        target_dt = log.hora_alvo
+        hour = target_dt.hour
+        date_part = target_dt.date()
+        
+        # Delete existing log to allow new one
+        # Note: predict_hour_with_logging checks existence. We must delete first or force update.
+        # Let's delete it.
+        db.delete(log)
+        db.commit()
+        
+        # Re-run prediction
+        forecast = HyperForecast(db)
+        result = forecast.predict_hour_with_logging(hour, date_part)
+        
+        return jsonify({
+            "success": True, 
+            "message": "Log regenerado",
+            "data": result
+        })
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Regenerate log failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        db.close()
+
+
 @api_bp.route('/forecast/learning/analytics', methods=['GET'])
 def get_forecast_analytics():
     """
@@ -1099,17 +1163,73 @@ def trigger_calibration():
         
         return jsonify({
             "success": True,
-            "skipped": False,
-            "data": {
-                "adjustments": adjustments,
-                "total_adjustments": len(adjustments) if adjustments else result.get("adjusted", 0)
-            }
+            "data": result,
+            "message": "Calibração concluída"
         })
     except Exception as e:
-        logger.error(f"Calibration error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Calibration trigger failed: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+@api_bp.route('/forecast/learning/logs/cleanup', methods=['DELETE'])
+def cleanup_duplicates():
+    """
+    Remove duplicate ForecastLog entries for the same hora_alvo.
+    Keeps the most recent entry (highest ID).
+    """
+    try:
+        from app.models.forecast_learning import ForecastLog
+        from sqlalchemy import func
+        
+        db = SessionLocal()
+        
+        # 1. Find duplicates: hour with count > 1
+        duplicates = db.query(
+            ForecastLog.hora_alvo, 
+            func.count(ForecastLog.id)
+        ).group_by(ForecastLog.hora_alvo).having(func.count(ForecastLog.id) > 1).all()
+        
+        deleted_count = 0
+        
+        for hour, count in duplicates:
+            # Get all logs for this hour, ordered by ID desc (newest first)
+            logs = db.query(ForecastLog).filter(ForecastLog.hora_alvo == hour).order_by(ForecastLog.id.desc()).all()
+            
+            # Keep the first one (newest), delete the rest
+            # Ideally we check which one has 'valor_real' but usually newest is best or reconciled one.
+            # Let's verify if any have valor_real.
+            
+            keeper = logs[0]
+            # If the newest doesn't have real value but an older one does, keep the older one?
+            # Start logic: Prefer one with valor_real
+            best_log = None
+            for log in logs:
+                if log.valor_real is not None:
+                    best_log = log
+                    break
+            
+            if not best_log:
+                best_log = logs[0] # Keep newest if none reconciled
+                
+            # Delete others
+            for log in logs:
+                if log.id != best_log.id:
+                    db.delete(log)
+                    deleted_count += 1
+        
+        db.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": f"Limpeza concluída. {deleted_count} duplicatas removidas.",
+            "deleted": deleted_count
+        })
+        
+    except Exception as e:
+        db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        db.close()
+
 
 
 @api_bp.route('/forecast/learning/generate-predictions', methods=['POST'])
@@ -1348,26 +1468,24 @@ def get_learning_evolution():
             
             logs = logs_query.all()
             
-            # Get calibration counts from system logs
+            # Get calibration counts from CalibrationHistory table
             calibration_counts = {}
             try:
-                from app.models.system_log import SystemLog
+                from app.models.forecast_learning import CalibrationHistory
                 cal_query = db.query(
-                    func.date(SystemLog.created_at).label('date'),
-                    func.count(SystemLog.id).label('count')
-                ).filter(
-                    SystemLog.message.like('%Calibra%')
+                    func.date(CalibrationHistory.data_calibracao).label('date'),
+                    func.count(CalibrationHistory.id).label('count')
                 )
                 
                 if start_date and end_date:
                     cal_query = cal_query.filter(and_(
-                        SystemLog.created_at >= since,
-                        SystemLog.created_at <= until
+                        CalibrationHistory.data_calibracao >= since,
+                        CalibrationHistory.data_calibracao <= until
                     ))
                 else:
-                    cal_query = cal_query.filter(SystemLog.created_at >= since)
+                    cal_query = cal_query.filter(CalibrationHistory.data_calibracao >= since)
                     
-                calibrations = cal_query.group_by(func.date(SystemLog.created_at)).all()
+                calibrations = cal_query.group_by(func.date(CalibrationHistory.data_calibracao)).all()
                 for cal in calibrations:
                     calibration_counts[cal.date] = cal.count
             except Exception:
@@ -2144,14 +2262,24 @@ def get_product_forecasts():
 @api_bp.route('/forecast/products/sync', methods=['POST'])
 def sync_product_forecasts():
     """
-    Manually trigger product metrics sync job.
+    Manually trigger comprehensive sync (Ads + Product Metrics).
     """
     try:
+        # 1. Sync Ads from Mercado Livre (fetch latest stock/transfers)
+        from app.services.sync_engine import SyncEngine
+        sync_engine = SyncEngine()
+        logger.info("[MANUAL-SYNC] Starting Ad Sync...")
+        sync_engine.sync_ads()
+        
+        # 2. Sync Product Forecast Metrics (calculate curves/coverage)
         from app.jobs.product_sync import sync_product_metrics
+        logger.info("[MANUAL-SYNC] Starting Product Metrics Sync...")
         result = sync_product_metrics()
+        
         return jsonify({
             "success": True,
-            "data": result
+            "data": result,
+            "message": "Full sync completed successfully"
         })
     except Exception as e:
         logger.error(f"Error syncing product forecasts: {e}")
