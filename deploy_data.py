@@ -30,13 +30,14 @@ def migrate():
 
     try:
         remote_engine = create_engine(MYSQL_URL)
-        print("Conectado ao MySQL com sucesso!")
+        with remote_engine.connect() as conn:
+            conn.execute(sqlalchemy.text("SET FOREIGN_KEY_CHECKS = 0;"))
+            print("Conectado ao MySQL e verificações de integridade desativadas temporariamente.")
     except Exception as e:
         print(f"Erro ao conectar no MySQL: {e}")
         return
 
-    # LISTA COMPLETA DE TABELAS (INCLUINDO IA E LOGS)
-    # Vamos pegar todas as tabelas que existem no seu SQLite
+    # LISTA COMPLETA DE TABELAS
     local_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
     tables = [row[0] for row in local_cursor.fetchall()]
 
@@ -51,26 +52,26 @@ def migrate():
                 continue
 
             data = [dict(row) for row in rows]
-            
             meta = MetaData()
             meta.reflect(bind=remote_engine)
             target_table = meta.tables.get(table)
             
             if target_table is not None:
-                # Limpar dados existentes na produção para evitar conflitos de ID
-                try:
-                    with remote_engine.connect() as conn:
-                        conn.execute(target_table.delete())
-                        conn.execute(target_table.insert(), data)
-                        conn.commit()
-                    print(f"OK ({len(data)} registros)")
-                except Exception as ins_err:
-                    print(f"Erro na inserção: {ins_err}")
+                with remote_engine.connect() as conn:
+                    # Usar o text() do SQLAlchemy para comandos diretos
+                    conn.execute(target_table.delete())
+                    conn.execute(target_table.insert(), data)
+                    conn.commit()
+                print(f"OK ({len(data)} registros)")
             else:
-                print(f"Ignorada (Tabela não existe no destino)")
+                print(f"Ignorada (Não existe no destino)")
                 
         except Exception as e:
             print(f"ERRO: {e}")
+
+    # Reativar FK Checks
+    with remote_engine.connect() as conn:
+        conn.execute(sqlalchemy.text("SET FOREIGN_KEY_CHECKS = 1;"))
 
     local_conn.close()
     print("\n--- Migração Total Concluída! ---")
