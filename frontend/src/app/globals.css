@@ -1,0 +1,188 @@
+@import "tailwindcss";
+
+:root {
+    --background: #0D0D14;
+    --foreground: #F8FAFC;
+
+    /* HyperShop Theme */
+    --hs-blue: #1E3A5F;
+    --hs-green: #2ECC71;
+    --hs-orange: #F39C12;
+    --hs-dark: #1A1A2E;
+    --hs-dark-deep: #0D0D14;
+    --hs-border: #2D2D3A;
+    --hs-error: #E74C3C;
+}
+
+body {
+    color: var(--foreground);
+    background: var(--background);
+}
+
+/* Scrollbar Customization */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+    background: #2D2D3A;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+/* Utilities */
+.text-mono {
+    font-family: 'Roboto Mono', monospace;
+}
+
+/* Arrow Draw Animation - builds the arrow path in arrow direction */
+@keyframes draw-arrow {
+    0% {
+        stroke-dashoffset: -50;
+        opacity: 0.3;
+    }
+
+    35% {
+        stroke-dashoffset: 0;
+        opacity: 1;
+    }
+
+    50% {
+        stroke-dashoffset: 0;
+        opacity: 1;
+    }
+
+    85% {
+        stroke-dashoffset: 50;
+        opacity: 0.3;
+    }
+
+    100% {
+        stroke-dashoffset: 50;
+        opacity: 0;
+    }
+}
+
+.arrow-shine-up,
+.arrow-shine-down {
+    stroke-dasharray: 50;
+    animation: draw-arrow 4s ease-in-out infinite;
+}
+
+.arrow-shine-up {
+    color: #10b981;
+}
+
+.arrow-shine-down {
+    color: #f43f5e;
+}
+
+/* Pulsing Alert Icon */
+@keyframes pulse-alert {
+
+    0%,
+    100% {
+        filter: drop-shadow(0 0 0 rgba(244, 63, 94, 0));
+        transform: scale(1);
+    }
+
+    50% {
+        filter: drop-shadow(0 0 8px rgba(244, 63, 94, 0.8));
+        transform: scale(1.05);
+    }
+}
+
+.pulse-alert {
+    animation: pulse-alert 1.5s ease-in-out infinite;
+}
+
+/* Premium Border Glow / Beam Effect */
+@keyframes border-beam {
+    0% {
+        offset-distance: 0%;
+    }
+
+    100% {
+        offset-distance: 100%;
+    }
+}
+
+.premium-border-container {
+    position: relative;
+    border-radius: 0.75rem;
+    /* Matches xl */
+}
+
+.premium-border-beam {
+    pointer-events: none;
+    position: absolute;
+    inset: -1.5px;
+    border-radius: inherit;
+    padding: 1.5px;
+    background: transparent;
+    overflow: hidden;
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask-composite: xor;
+    -webkit-mask-composite: xor;
+}
+
+.premium-border-beam::after {
+    content: "";
+    position: absolute;
+    aspect-ratio: 1 / 1;
+    width: 140px;
+    background: linear-gradient(to right, transparent, rgba(34, 211, 238, 0.3), rgba(129, 140, 248, 0.3), transparent);
+    offset-path: rect(0 auto auto 0 round 250px);
+    animation: border-beam 12s linear infinite;
+}
+
+.premium-card {
+    background: #12121a;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    transition: all 0.3s ease;
+}
+
+.premium-card:hover {
+    border-color: rgba(34, 211, 238, 0.2);
+    box-shadow: 0 0 20px rgba(34, 211, 238, 0.05);
+}
+
+/* Shimmer Animation for Progress Bars */
+@keyframes shimmer {
+    0% {
+        transform: translateX(-200%);
+    }
+
+    100% {
+        transform: translateX(200%);
+    }
+}
+
+.animate-shimmer {
+    width: 50%;
+    animation: shimmer 2.5s linear infinite;
+}
+
+/* Slide Right Animation for Divider */
+@keyframes slideRight {
+    0% {
+        transform: translateX(-100%);
+    }
+
+    100% {
+        transform: translateX(400%);
+    }
+}
