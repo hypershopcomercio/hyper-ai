@@ -4,7 +4,6 @@ Stores product-level metrics for intelligent forecasting
 """
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, DateTime, Date, Numeric, Boolean
-from sqlalchemy.dialects.postgresql import JSONB
 from app.models.base import Base
 
 
