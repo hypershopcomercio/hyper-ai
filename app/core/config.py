@@ -27,8 +27,10 @@ class Settings(BaseSettings):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         print(f"DEBUG: Loaded DATABASE_URL: {self.DATABASE_URL}")
-        if "sqlite" in self.DATABASE_URL.lower():
-            print("CRITICAL ERROR: SQLite URL detected in configuration!")
-            raise ValueError("SQLite is NOT allowed. Please configure DATABASE_URL for PostgreSQL in .env")
+        if not self.DATABASE_URL:
+             # Default to local sqlite if nothing is provided
+             self.DATABASE_URL = "sqlite:///hyper_sync.db"
+             print("WARNING: No DATABASE_URL found. Defaulting to local SQLite.")
+
 
 settings = Settings()

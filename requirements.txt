@@ -1,5 +1,5 @@
 sqlalchemy
-psycopg2-binary
+pymysql
 requests
 python-dotenv
 apscheduler
@@ -8,3 +8,4 @@ pydantic-settings
 tenacity
 flask
 flask-cors
+cryptography
