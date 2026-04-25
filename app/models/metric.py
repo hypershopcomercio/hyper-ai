@@ -5,7 +5,7 @@ class Metric(Base):
     __tablename__ = "metrics"
 
     id = Column(Integer, primary_key=True, index=True)
-    ad_id = Column(String, ForeignKey("ads.id"), index=True)
+    ad_id = Column(String(255), ForeignKey("ads.id"), index=True)
     date = Column(Date, index=True)
     
     visits = Column(Integer, default=0)
