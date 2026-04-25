@@ -6,24 +6,23 @@ from app.core.database import Base
 class Ad(Base):
     __tablename__ = "ads"
 
-    id = Column(String, primary_key=True, index=True) # ML Item ID (MLB...)
-    seller_id = Column(String, index=True)
-    title = Column(String)
+    id = Column(String(255), primary_key=True, index=True) # ML Item ID (MLB...)
+    seller_id = Column(String(255), index=True)
+    title = Column(String(500))
     price = Column(Float)
-    currency_id = Column(String)
+    currency_id = Column(String(50))
     available_quantity = Column(Integer)
     sold_quantity = Column(Integer)
-    status = Column(String)
-    status = Column(String)
-    listing_type_id = Column(String, nullable=True) # gold_pro, gold_special
-    listing_type = Column(String, nullable=True) # Legacy or descriptive
-    category_name = Column(String, nullable=True)
-    permalink = Column(String)
-    thumbnail = Column(String)
+    status = Column(String(100))
+    listing_type_id = Column(String(100), nullable=True) # gold_pro, gold_special
+    listing_type = Column(String(100), nullable=True) # Legacy or descriptive
+    category_name = Column(String(255), nullable=True)
+    permalink = Column(String(1000))
+    thumbnail = Column(String(1000))
     pictures = Column(JSON, nullable=True)
     attributes = Column(JSON, nullable=True)
-    video_id = Column(String, nullable=True) # YouTube Video ID
-    short_description = Column(String, nullable=True) # Clips/Summary content
+    video_id = Column(String(255), nullable=True) # YouTube Video ID
+    short_description = Column(String(1000), nullable=True) # Clips/Summary content
     manual_video_verified = Column(Boolean, default=False) # Manual override for Clips
     
     # Prices
@@ -33,14 +32,14 @@ class Ad(Base):
     
     # Shipping & Fulfillment
     free_shipping = Column(Boolean, default=False)
-    shipping_mode = Column(String, nullable=True) # me2, etc
+    shipping_mode = Column(String(100), nullable=True) # me2, etc
     is_full = Column(Boolean, default=False)
     is_catalog = Column(Boolean, default=False)
     health_score = Column(Float, default=0.0) # 0-100 or 0-1
     health = Column(Float, nullable=True) # Alias or specific field from migration
     
-    sku = Column(String, index=True, nullable=True)
-    gtin = Column(String, index=True, nullable=True)
+    sku = Column(String(255), index=True, nullable=True)
+    gtin = Column(String(255), index=True, nullable=True)
     
     # Tiny Data
     cost = Column(Float, nullable=True)
@@ -48,7 +47,7 @@ class Ad(Base):
     length_mm = Column(Float, nullable=True)
     width_mm = Column(Float, nullable=True)
     height_mm = Column(Float, nullable=True)
-    tiny_id = Column(String, nullable=True)
+    tiny_id = Column(String(255), nullable=True)
 
     # Margin Calculation
     margin_percent = Column(Float, nullable=True)
@@ -86,9 +85,9 @@ class Ad(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_updated = Column(DateTime, nullable=True) # Sync timestamp
     
-    # Hyper Sync 2.0 New Fields
-    subtitle = Column(String)
-    seller_custom_field = Column(String)
+    # Hyper Sync 2.0 New Files
+    subtitle = Column(String(500))
+    seller_custom_field = Column(String(255))
     start_time = Column(DateTime(timezone=True))
     stop_time = Column(DateTime(timezone=True))
     raw_data = Column(JSON)     # Full payload backup

@@ -6,9 +6,9 @@ from app.core.database import Base
 class AdVariation(Base):
     __tablename__ = "ad_variations"
 
-    id = Column(String, primary_key=True, index=True) # ML Variation ID
-    ad_id = Column(String, ForeignKey("ads.id"), index=True)
-    sku = Column(String, index=True, nullable=True)
+    id = Column(String(255), primary_key=True, index=True) # ML Variation ID
+    ad_id = Column(String(255), ForeignKey("ads.id"), index=True)
+    sku = Column(String(255), index=True, nullable=True)
     
     # Financials
     price = Column(Float)
@@ -17,9 +17,9 @@ class AdVariation(Base):
     tax_cost = Column(Float, default=0.0) # Calculated
     
     # Details
-    attribute_combination = Column(String, nullable=True) # e.g. "Cor: Vermelho, Tamanho: G"
+    attribute_combination = Column(String(500), nullable=True) # e.g. "Cor: Vermelho, Tamanho: G"
     picture_ids = Column(JSON)
-    seller_custom_field = Column(String)
+    seller_custom_field = Column(String(255))
     
     # Relationships
     # ad = relationship("Ad", back_populates="variations")

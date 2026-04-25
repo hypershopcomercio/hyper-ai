@@ -5,17 +5,17 @@ from app.core.database import Base
 class Sale(Base):
     __tablename__ = "sales"
 
-    id = Column(String, primary_key=True) # Order ID
+    id = Column(String(255), primary_key=True) # Order ID
     date_created = Column(DateTime(timezone=True), index=True)
-    seller_id = Column(String)
-    item_id = Column(String, ForeignKey("ads.id"), index=True)
-    status = Column(String)
+    seller_id = Column(String(255))
+    item_id = Column(String(255), ForeignKey("ads.id"), index=True)
+    status = Column(String(100))
     
     total_amount = Column(Float)
-    currency_id = Column(String)
+    currency_id = Column(String(50))
     
     quantity = Column(Integer)
-    buyer_id = Column(String)
+    buyer_id = Column(String(255))
     
     # Financials (Realized)
     unit_price = Column(Float) # Price per unit sold

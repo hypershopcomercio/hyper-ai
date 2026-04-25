@@ -16,11 +16,11 @@ class Supplier(Base):
     __tablename__ = "suppliers"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    cnpj = Column(String, unique=True, nullable=True)
-    contact_name = Column(String, nullable=True)
-    email = Column(String, nullable=True)
-    phone = Column(String, nullable=True)
+    name = Column(String(255), nullable=False)
+    cnpj = Column(String(20), unique=True, nullable=True)
+    contact_name = Column(String(255), nullable=True)
+    email = Column(String(255), nullable=True)
+    phone = Column(String(50), nullable=True)
     lead_time_days = Column(Integer, default=7) # Tempo médio em dias
     
     # Metadata
@@ -35,7 +35,7 @@ class PurchaseOrder(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=False)
-    status = Column(String, default=PurchaseStatus.DRAFT) # Enum como string
+    status = Column(String(100), default=PurchaseStatus.DRAFT) # Enum como string
     
     expected_date = Column(Date, nullable=True)
     received_date = Column(DateTime, nullable=True)
@@ -43,7 +43,7 @@ class PurchaseOrder(Base):
     total_cost = Column(Numeric(10, 2), default=0.0) # Soma dos itens
     additional_costs = Column(Numeric(10, 2), default=0.0) # Frete extra, taxas
     
-    notes = Column(String, nullable=True)
+    notes = Column(String(1000), nullable=True)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -57,11 +57,11 @@ class PurchaseOrderItem(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(Integer, ForeignKey("purchase_orders.id"), nullable=False)
-    ad_id = Column(String, ForeignKey("ads.id"), nullable=True) # Pode ser nulo se comprarmos algo que não é Ad ainda? Melhor linkar com Ad ou Produto Base
+    ad_id = Column(String(255), ForeignKey("ads.id"), nullable=True) # Pode ser nulo se comprarmos algo que não é Ad ainda? Melhor linkar com Ad ou Produto Base
     # Por simplificação, linkamos com Ad (SKU principal)
     
-    sku = Column(String, nullable=False) # Redundância útil
-    title = Column(String, nullable=False)
+    sku = Column(String(255), nullable=False) # Redundância útil
+    title = Column(String(500), nullable=False)
     
     quantity = Column(Integer, nullable=False)
     unit_cost = Column(Numeric(10, 2), nullable=False)
@@ -80,8 +80,8 @@ class InboundShipment(Base):
     __tablename__ = "inbound_shipments"
     
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=True) # Ex: "Carga 05/01"
-    status = Column(String, default="planning") # planning, shipped, received, closed
+    name = Column(String(255), nullable=True) # Ex: "Carga 05/01"
+    status = Column(String(100), default="planning") # planning, shipped, received, closed
     
     shipping_cost = Column(Numeric(10, 2), default=0.0) # Custo do frete para o CD
     other_costs = Column(Numeric(10, 2), default=0.0)
@@ -100,7 +100,7 @@ class StockBatch(Base):
     __tablename__ = "stock_batches"
     
     id = Column(Integer, primary_key=True, index=True)
-    ad_id = Column(String, ForeignKey("ads.id"), nullable=False)
+    ad_id = Column(String(255), ForeignKey("ads.id"), nullable=False)
     
     initial_quantity = Column(Integer, nullable=False)
     remaining_quantity = Column(Integer, nullable=False)
