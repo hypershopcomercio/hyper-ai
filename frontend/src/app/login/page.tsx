@@ -51,7 +51,7 @@ export default function LoginPage() {
                 <div className="text-center mb-8">
                     <div className="inline-flex items-center justify-center mb-4 relative">
                         <img
-                            src="/logo-ai.png"
+                            src="/hyper-ai/logo-ai.png"
                             alt="HyperAI"
                             className="h-20 w-auto drop-shadow-[0_0_20px_rgba(16,185,129,0.75)]"
                         />
