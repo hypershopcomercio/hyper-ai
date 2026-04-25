@@ -3,8 +3,7 @@ Hyper Forecast Learning System - Database Models
 Models for logging predictions and tracking calibration history
 """
 from datetime import datetime, date
-from sqlalchemy import Column, Integer, String, DateTime, Date, Numeric, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Column, Integer, String, DateTime, Date, Numeric, Text, JSON
 from app.models.base import Base
 
 
@@ -40,7 +39,7 @@ class ForecastLog(Base):
     
     # Snapshot of all multipliers/factors used in this prediction
     # Example: {"dia_semana": 1.15, "hora": 0.8, "momentum": 1.05}
-    fatores_usados = Column(JSONB, nullable=False, default={})
+    fatores_usados = Column(JSON, nullable=False, default={})
     
     # Additional context for analysis
     baseline_usado = Column(Numeric(10, 2), nullable=True)  # Base value before multipliers
@@ -48,7 +47,7 @@ class ForecastLog(Base):
     
     # Calibration tracking
     calibrated = Column(String(1), default='N')  # 'Y' = used in calibration, 'N' = not yet
-    calibration_impact = Column(JSONB, nullable=True)  # Details of calibration adjustments made using this log
+    calibration_impact = Column(JSON, nullable=True)  # Details of calibration adjustments made using this log
     
     def __repr__(self):
         return f"<ForecastLog {self.id}: {self.hora_alvo} prev={self.valor_previsto} real={self.valor_real}>"
@@ -159,11 +158,11 @@ class LearningSnapshot(Base):
     
     # Factor performance (JSON with error per factor type/key)
     # {"day_of_week": {"seg": 5.2, "ter": -3.1}, "hour": {"11": -15.2, "15": 3.4}}
-    fatores_performance = Column(JSONB, default={})
+    fatores_performance = Column(JSON, default={})
     
     # Calibrations made today
     ajustes_realizados = Column(Integer, default=0)
-    detalhes_ajustes = Column(JSONB, default=[])
+    detalhes_ajustes = Column(JSON, default=[])
     
     # Best/Worst performers
     melhor_fator = Column(String(100), nullable=True)  # "hour.15" (lowest error)
