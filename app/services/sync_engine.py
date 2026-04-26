@@ -199,24 +199,24 @@ class SyncEngine:
         ad.sku = sku
         ad.gtin = gtin
         
-        ad.shipping_cost = 0.0
-        if ad.free_shipping:
-             ad.shipping_cost = self.meli_service.get_shipping_cost(ad.id, seller_id)
+        # ad.shipping_cost = 0.0
+        # if ad.free_shipping:
+        #      ad.shipping_cost = self.meli_service.get_shipping_cost(ad.id, seller_id)
         
-        if ad.is_full:
-            inventory_id = item_data.get("inventory_id")
-            if inventory_id:
-                f_data = self.meli_service.get_fulfillment_stock(inventory_id)
-                if f_data:
-                    # Parse 'transfer' quantity
-                    # "not_available_detail": [{"status": "transfer", "quantity": 135}, ...]
-                    details = f_data.get("not_available_detail", [])
-                    transfer_qty = 0
-                    for d in details:
-                        if d.get("status") == "transfer":
-                            transfer_qty += d.get("quantity", 0)
-                    
-                    ad.stock_incoming = transfer_qty
+        # if ad.is_full:
+        #     inventory_id = item_data.get("inventory_id")
+        #     if inventory_id:
+        #         f_data = self.meli_service.get_fulfillment_stock(inventory_id)
+        #         if f_data:
+        #             # Parse 'transfer' quantity
+        #             # "not_available_detail": [{"status": "transfer", "quantity": 135}, ...]
+        #             details = f_data.get("not_available_detail", [])
+        #             transfer_qty = 0
+        #             for d in details:
+        #                 if d.get("status") == "transfer":
+        #                     transfer_qty += d.get("quantity", 0)
+        #             
+        #             ad.stock_incoming = transfer_qty
         
         # Sync Costs & Margins (Tiny + Tax + Fixed)
         try:
