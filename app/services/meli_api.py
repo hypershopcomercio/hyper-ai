@@ -92,10 +92,13 @@ class MeliApiService:
         Endpoint should be relative, e.g. '/orders/search'
         """
         import time
+        # Safety gap between requests to prevent hitting rate limits
+        time.sleep(2)
+        
         url = f"{self.base_url}{endpoint}"
         
         max_retries = 3
-        retry_delay = 5 # seconds
+        retry_delay = 10 # seconds
         
         for attempt in range(max_retries + 1):
             try:
