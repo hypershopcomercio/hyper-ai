@@ -208,13 +208,14 @@ def login():
         })
 
         # Configurar Cookie de Autenticação
+        is_production = "localhost" not in request.host
         response.set_cookie(
             key="auth_token",
             value=token,
-            httponly=True,  # Segurança: impede que scripts maliciosos leiam o token
-            secure=True,    # Segurança: só envia via HTTPS
+            httponly=True,
+            secure=is_production,  # Só exige HTTPS se for produção
             samesite="Lax",
-            max_age=24 * 3600  # 24 horas
+            max_age=24 * 3600
         )
         
         return response
