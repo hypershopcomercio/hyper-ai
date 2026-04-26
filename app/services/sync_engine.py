@@ -311,7 +311,7 @@ class SyncEngine:
             ad_map = {ad.id: ad for ad in ads}
             ad_ids = list(ad_map.keys())
             
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                 future_to_id = {executor.submit(self._fetch_visits_wrapper, aid): aid for aid in ad_ids}
                 
                 for future in concurrent.futures.as_completed(future_to_id):

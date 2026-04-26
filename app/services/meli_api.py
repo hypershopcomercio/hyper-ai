@@ -88,54 +88,71 @@ class MeliApiService:
 
     def request(self, method: str, endpoint: str, params: dict = None, json_data: dict = None):
         """
-        Generic request method with automatic token refresh.
+        Generic request method with automatic token refresh and 429 (Rate Limit) retry.
         Endpoint should be relative, e.g. '/orders/search'
         """
+        import time
         url = f"{self.base_url}{endpoint}"
         
-        # Headers might need refresh, so we get them inside the loop or use self.get_headers() which uses current self.access_token
+        max_retries = 3
+        retry_delay = 5 # seconds
         
-        try:
-            # Added timeout=30 to prevent hangs
-            resp = requests.request(method, url, headers=self.get_headers(), params=params, json=json_data, timeout=30)
-            
-            # Token Refresh on 401
-            if resp.status_code == 401:
-                logger.warning(f"401 Unauthorized for {endpoint}. Refreshing token...")
+        for attempt in range(max_retries + 1):
+            try:
+                # Added timeout=30 to prevent hangs
+                resp = requests.request(method, url, headers=self.get_headers(), params=params, json=json_data, timeout=30)
                 
-                local_session = False
-                db = self.db_session
-                if not db:
-                     from app.core.database import SessionLocal
-                     db = SessionLocal()
-                     local_session = True
-                
-                try:
-                    token_record = db.query(OAuthToken).filter(OAuthToken.provider == "mercadolivre").first()
-                    if token_record:
-                        self.access_token = self._refresh_token(db, token_record)
-                        # Retry
-                        resp = requests.request(method, url, headers=self.get_headers(), params=params, json=json_data, timeout=30)
+                # Handle Rate Limit (429)
+                if resp.status_code == 429:
+                    if attempt < max_retries:
+                        sleep_time = retry_delay * (attempt + 1)
+                        logger.warning(f"Rate limit (429) hit for {endpoint}. Retrying in {sleep_time}s... (Attempt {attempt + 1}/{max_retries})")
+                        time.sleep(sleep_time)
+                        continue
                     else:
-                        logger.error("No token to refresh.")
-                except Exception as e:
-                    logger.error(f"Refresh failed: {e}")
-                finally:
-                    if local_session:
-                        db.close()
-            
-            return resp
-            
-        except requests.RequestException as e:
-            logger.error(f"Request Error for {endpoint}: {e}")
-            raise
+                        logger.error(f"Rate limit (429) persisted after {max_retries} retries for {endpoint}.")
+                
+                # Token Refresh on 401
+                if resp.status_code == 401:
+                    logger.warning(f"401 Unauthorized for {endpoint}. Refreshing token...")
+                    
+                    local_session = False
+                    db = self.db_session
+                    if not db:
+                         from app.core.database import SessionLocal
+                         db = SessionLocal()
+                         local_session = True
+                    
+                    try:
+                        token_record = db.query(OAuthToken).filter(OAuthToken.provider == "mercadolivre").first()
+                        if token_record:
+                            self.access_token = self._refresh_token(db, token_record)
+                            # Let the loop retry once more with the new token
+                            continue
+                        else:
+                            logger.error("No token to refresh.")
+                    except Exception as e:
+                        logger.error(f"Refresh failed: {e}")
+                    finally:
+                        if local_session:
+                            db.close()
+                
+                return resp
+                
+            except requests.RequestException as e:
+                if attempt < max_retries:
+                    logger.warning(f"Request error for {endpoint}: {e}. Retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    continue
+                logger.error(f"Request Error for {endpoint} after {max_retries} retries: {e}")
+                raise
 
     def get_user_items(self, user_id: str):
-        url = f"{self.base_url}/users/{user_id}/items/search"
+        endpoint = f"/users/{user_id}/items/search"
         params = {"search_type": "scan", "limit": 100}
         items = []
         while True:
-            response = requests.get(url, params=params, headers=self.get_headers(), timeout=30)
+            response = self.request('GET', endpoint, params=params)
             response.raise_for_status()
             data = response.json()
             items.extend(data.get("results", []))
@@ -153,9 +170,9 @@ class MeliApiService:
         for i in range(0, len(item_ids), chunk_size):
             chunk = item_ids[i:i+chunk_size]
             ids_str = ",".join(chunk)
-            url = f"{self.base_url}/items"
+            endpoint = "/items"
             params = {"ids": ids_str}
-            response = requests.get(url, params=params, headers=self.get_headers())
+            response = self.request('GET', endpoint, params=params)
             
             if response.status_code == 200:
                 results = response.json()
@@ -171,13 +188,13 @@ class MeliApiService:
         Fetch visits for a specific time window.
         ending: Optional 'YYYY-MM-DD'. If not provided, defaults to today/now.
         """
-        url = f"{self.base_url}/items/{item_id}/visits/time_window"
+        endpoint = f"/items/{item_id}/visits/time_window"
         params = {"last": last, "unit": unit}
         if ending:
             params["ending"] = ending
             
         try:
-             response = requests.get(url, params=params, headers=self.get_headers(), timeout=10)
+             response = self.request('GET', endpoint, params=params)
              if response.status_code == 200:
                  return response.json()
              return None
@@ -188,15 +205,11 @@ class MeliApiService:
     def get_total_visits(self, item_id: str):
         """
         Fetches the total lifetime visits for an item.
-        Uses /items/{id} endpoint which usually contains 'total_visits' or similar field?
-        Actually, the standard /items/{id} doesn't expose 'visits' easily.
         Reliable way: /items/{id}/visits which typically returns total.
         """
-        url = f"{self.base_url}/items/{item_id}/visits"
         try:
-            response = requests.get(url, headers=self.get_headers(), timeout=10)
+            response = self.request('GET', f"/items/{item_id}/visits")
             if response.status_code == 200:
-                # Structure: {"item_id": "...", "total_visits": 1234, ...}
                 data = response.json()
                 return data.get("total_visits", 0)
             return 0
@@ -207,42 +220,21 @@ class MeliApiService:
     def get_item_pricing(self, item_id: str):
         """
         Fetches detailed pricing info to find active promotions.
-        Returns: { "original_price": float|None, "promotion_price": float|None, "price": float }
         """
-        url = f"{self.base_url}/items/{item_id}/prices"
         try:
-            response = requests.get(url, headers=self.get_headers(), timeout=5)
+            response = self.request('GET', f"/items/{item_id}/prices")
             if response.status_code == 200:
                 data = response.json()
                 prices = data.get("prices", [])
                 
-                # Logic to find "De/Por"
-                # Usually:
-                # 'standard' price is the 'original_price' if a promotion is active
-                # 'promotion' price is the current selling price
-                
                 standard = next((p for p in prices if p.get("type") == "standard"), None)
                 promotion = next((p for p in prices if p.get("type") == "promotion"), None)
                 
-                res = {
-                    "original_price": None,
-                    "promotion_price": None,
-                    "price": None
-                }
-                
-                if standard:
-                    res["price"] = standard.get("amount") # Default fallback
-                    
+                res = {"original_price": None, "promotion_price": None, "price": None}
+                if standard: res["price"] = standard.get("amount")
                 if promotion:
-                    # Active promotion
-                    # Check dates? Meli usually returns valid ones or logic in backend handles it.
-                    # We assume returned promotion is relevant.
                     res["promotion_price"] = promotion.get("amount")
-                    res["original_price"] = promotion.get("regular_amount") # This is often the "De" price
-                    if not res["original_price"] and standard:
-                         # Fallback: if regular_amount is missing, use standard price
-                         res["original_price"] = standard.get("amount")
-                
+                    res["original_price"] = promotion.get("regular_amount") or (standard.get("amount") if standard else None)
                 return res
             return None
         except Exception as e:
@@ -251,52 +243,19 @@ class MeliApiService:
 
     def get_orders(self, seller_id: str, item_id: str = None, date_from: str = None, date_to: str = None):
         """
-        Search orders. Optionally filter by item_id (q parameter) or date range.
-        Dates should be ISO format string.
+        Search orders with retry logic.
         """
-        url = f"{self.base_url}/orders/search"
-        params = {
-            "seller": seller_id,
-            "sort": "date_desc",
-            "limit": 50
-        }
-        if item_id:
-            params["q"] = item_id 
-        
-        if date_from:
-            params["order.date_created.from"] = date_from
-        if date_to:
-            params["order.date_created.to"] = date_to
+        endpoint = "/orders/search"
+        params = {"seller": seller_id, "sort": "date_desc", "limit": 50}
+        if item_id: params["q"] = item_id 
+        if date_from: params["order.date_created.from"] = date_from
+        if date_to: params["order.date_created.to"] = date_to
             
         orders = []
         while True:
-            response = requests.get(url, params=params, headers=self.get_headers())
-            
-            # Retry on 401 (Unauthorized) - Token might be revoked or expired despite DB time
-            if response.status_code == 401:
-                logger.warning("401 Unauthorized in get_orders. Attempting token refresh and retry...")
-                # We need a DB session to refresh
-                local_session = False
-                db = self.db_session
-                if not db:
-                     from app.core.database import SessionLocal
-                     db = SessionLocal()
-                     local_session = True
-                
-                try:
-                    token_record = db.query(OAuthToken).filter(OAuthToken.provider == "mercadolivre").first()
-                    self.access_token = self._refresh_token(db, token_record)
-                    # Retry
-                    response = requests.get(url, params=params, headers=self.get_headers())
-                except Exception as e:
-                     logger.error(f"Retry failed: {e}")
-                finally:
-                     if local_session:
-                         db.close()
-
-            # Sometimes API returns 404/400 if no orders found or filters overlap bad
+            response = self.request('GET', endpoint, params=params)
             if response.status_code != 200:
-                logger.warning(f"Order search returned {response.status_code} for params {params}")
+                logger.warning(f"Order search returned {response.status_code}")
                 break
 
             data = response.json()
@@ -305,234 +264,101 @@ class MeliApiService:
             
             paging = data.get("paging", {})
             total = paging.get("total", 0)
-            
-            if len(orders) >= total:
-                break
+            if len(orders) >= total: break
                 
-            # Offset pagination
-            current_offset = params.get("offset", 0)
-            params["offset"] = current_offset + 50
-            if params["offset"] > 1000: # Safety limit
-                break
+            params["offset"] = params.get("offset", 0) + 50
+            if params["offset"] > 1000: break
         return orders
-
 
     def get_order(self, order_id: str):
         """Fetch single order by ID."""
-        url = f"{self.base_url}/orders/{order_id}"
-        resp = requests.get(url, headers=self.get_headers())
-        if resp.status_code == 200:
-            return resp.json()
-        elif resp.status_code == 401:
-             # Refresh logic (simplified dup from get_orders for now)
-             # Ideally reuse _refresh...
-             pass
-        logger.warning(f"Failed to fetch order {order_id}: {resp.status_code}")
+        resp = self.request('GET', f"/orders/{order_id}")
+        if resp.status_code == 200: return resp.json()
         return None
 
     def get_advertiser_id(self):
         """
-        Gets the advertiser_id for Product Ads from the authenticated user.
-        Endpoint: GET /advertising/advertisers?product_id=PADS
-        Response: {"advertisers": [{"advertiser_id": 123456, "site_id": "MLB", ...}]}
+        Gets the advertiser_id for Product Ads.
         """
-        url = f"{self.base_url}/advertising/advertisers"
-        params = {"product_id": "PADS"}
-        headers = {**self.get_headers(), "Api-Version": "1"}
-        
         try:
-            response = requests.get(url, params=params, headers=headers, timeout=30)
+            response = self.request('GET', "/advertising/advertisers", params={"product_id": "PADS"})
             if response.status_code == 200:
-                data = response.json()
-                # Response structure: {"advertisers": [{"advertiser_id": 347940, "site_id": "MLB", ...}]}
-                advertisers = data.get("advertisers", [])
-                if advertisers and len(advertisers) > 0:
-                    advertiser_id = advertisers[0].get("advertiser_id")
-                    logger.info(f"Found advertiser_id: {advertiser_id}")
-                    return advertiser_id
-                else:
-                    logger.warning("No advertisers found in response")
-                    return None
-            else:
-                logger.error(f"Failed to get advertiser_id: {response.status_code} - {response.text}")
-                return None
+                advertisers = response.json().get("advertisers", [])
+                if advertisers: return advertisers[0].get("advertiser_id")
+            return None
         except Exception as e:
             logger.error(f"Error getting advertiser_id: {e}")
             return None
 
     def get_ads_performance(self, item_ids: list[str] = None, date_from = None, date_to = None):
         """
-        Fetches Product Ads performance metrics for items within a date range.
-        If item_ids is None, returns metrics for ALL ads.
+        Fetches Product Ads performance metrics for items.
         """
-        # First, get the advertiser_id
         advertiser_id = self.get_advertiser_id()
-        if not advertiser_id:
-            logger.warning("No advertiser_id found. User may not have Product Ads enabled.")
-            return {"results": []}
+        if not advertiser_id: return []
         
-        # Build the correct URL
-        site_id = "MLB"  # Brazil
-        url = f"{self.base_url}/advertising/{site_id}/advertisers/{advertiser_id}/product_ads/ads/search"
+        endpoint = f"/advertising/MLB/advertisers/{advertiser_id}/product_ads/ads/search"
         
-        # Handle Date Types
-        d_from_str = date_from
-        d_to_str = date_to
-        
-        if hasattr(date_from, 'strftime'):
-            d_from_str = date_from.strftime("%Y-%m-%d")
-        if hasattr(date_to, 'strftime'):
-            d_to_str = date_to.strftime("%Y-%m-%d")
+        d_from = date_from.strftime("%Y-%m-%d") if hasattr(date_from, 'strftime') else date_from
+        d_to = date_to.strftime("%Y-%m-%d") if hasattr(date_to, 'strftime') else date_to
             
-        # Parameters for the search
         params = {
-            "date_from": d_from_str,
-            "date_to": d_to_str,
-            "metrics": "clicks,prints,cost,cpc,acos,roas",
+            "date_from": d_from, "date_to": d_to,
+            "metrics": "clicks,prints,cost,cpc,acos,roas,amount",
             "limit": 100
         }
         
-        headers = {**self.get_headers(), "Api-Version": "1"}
-        
         all_results = []
         offset = 0
-        
         try:
             while True:
                 params["offset"] = offset
-                response = requests.get(url, params=params, headers=headers, timeout=30)
+                response = self.request('GET', endpoint, params=params)
+                if response.status_code != 200: break
                 
-                if response.status_code == 200:
-                    data = response.json()
-                    results = data.get("results", [])
-                    all_results.extend(results)
-                    
-                    # Check pagination
-                    paging = data.get("paging", {})
-                    total = paging.get("total", 0)
-                    
-                    if len(all_results) >= total or not results:
-                        break
-                    
-                    offset += len(results)
-                    if offset > 1000:  # Safety limit
-                        break
-                elif response.status_code == 403:
-                    logger.warning("Ads API Access Forbidden (403). Check Token Scopes.")
-                    break
-                else:
-                    logger.error(f"Ads search failed: {response.status_code} - {response.text}")
-                    break
+                data = response.json()
+                results = data.get("results", [])
+                all_results.extend(results)
+                
+                paging = data.get("paging", {})
+                if len(all_results) >= paging.get("total", 0) or not results: break
+                offset += len(results)
+                if offset > 1000: break
             
-            # Filter results if item_ids provided
-            filtered_results = []
+            filtered = []
             item_ids_set = set(item_ids) if item_ids else None
-            
             for ad in all_results:
-                ad_item_id = ad.get("item_id")
-                # If no filter or item match
-                if not item_ids_set or ad_item_id in item_ids_set:
-                    metrics = ad.get("metrics", {})
-                    # Standardized return format (flattened or nested? The caller expects list of dicts with 'amount'?)
-                    # Caller in dashboard.py logic: row.get('amount')
-                    # API returns 'amount' usually? 
-                    # Docs say 'metrics' object has 'cost', 'clicks'.
-                    # Does 'metrics' have 'amount' (revenue)? No, usually 'sold_amount' or 'amount'.
-                    # Meli Ads API 'metrics': clicks, prints, cost, cpc, acos, roas. 
-                    # Revenue is NOT explicit in 'metrics' typically? 
-                    # Ah, 'amount' in previous crashy code might have been wrong too!
-                    # Ads API documentation: 'metrics' fields are: clicks, impressions, cost, cpc, ctr, conversion, amount (sales amount).
-                    # I need to ask for 'amount' in the 'metrics' param?
-                    # My params: "clicks,prints,cost,cpc,acos,roas". 'amount' is missing!
-                    
-                    # I will add 'amount' to params.
-                    # And map it.
-                    
-                    filtered_results.append({
-                        "item_id": ad_item_id,
-                        "cost": float(metrics.get("cost", 0) or 0),
-                        "amount": float(metrics.get("amount", 0) or 0), # REVENUE
-                        "clicks": int(metrics.get("clicks", 0) or 0),
-                        "prints": int(metrics.get("prints", 0) or 0)
+                if not item_ids_set or ad.get("item_id") in item_ids_set:
+                    m = ad.get("metrics", {})
+                    filtered.append({
+                        "item_id": ad.get("item_id"),
+                        "cost": float(m.get("cost", 0) or 0),
+                        "amount": float(m.get("amount", 0) or 0),
+                        "clicks": int(m.get("clicks", 0) or 0),
+                        "prints": int(m.get("prints", 0) or 0)
                     })
-            
-            logger.info(f"Ads API returned {len(all_results)} ads, {len(filtered_results)} matched")
-            return filtered_results # Return LIST directly, not dict wrapper
-            
+            return filtered
         except Exception as e:
             logger.error(f"Error fetching ads performance: {e}")
             return []
 
     def get_shipping_cost(self, item_id: str, seller_id: str):
         """
-        Fetches the cost of free shipping for the seller for a specific item.
-        Endpoint: GET /users/{seller_id}/shipping_options/free?item_id={item_id}
+        Fetches free shipping cost for the seller.
         """
-        url = f"{self.base_url}/users/{seller_id}/shipping_options/free"
-        params = {"item_id": item_id}
-        
         try:
-            # Note: This endpoint is often used to calculate costs for offering free shipping.
-            response = requests.get(url, params=params, headers=self.get_headers())
+            response = self.request('GET', f"/users/{seller_id}/shipping_options/free", params={"item_id": item_id})
             if response.status_code == 200:
-                data = response.json()
-                # Expected structure: { "coverage": { "all_country": { "list_cost": 30.9, ... } } }
-                # Or just a fallback cost. We want the 'list_cost' which is what the seller pays.
-                # Simplification: Look for 'list_cost' in the 'all_country' rule usually.
-                coverage = data.get("coverage", {})
-                all_country = coverage.get("all_country", {})
-                return float(all_country.get("list_cost", 0.0))
-            else:
-                # 404 means maybe not applicable or error
-                # logger.warning(f"Shipping cost fetch failed for {item_id}: {response.status_code}")
-                return 0.0
+                return float(response.json().get("coverage", {}).get("all_country", {}).get("list_cost", 0.0))
+            return 0.0
         except Exception as e:
             logger.error(f"Error fetching shipping cost for {item_id}: {e}")
             return 0.0
 
     def get_shipment(self, shipment_id: str):
-        """
-        Fetch shipment details including costs.
-        """
-        url = f"{self.base_url}/shipments/{shipment_id}"
-        resp = requests.get(url, headers=self.get_headers())
-        if resp.status_code == 200:
-            return resp.json()
-        logger.warning(f"Failed to fetch shipment {shipment_id}: {resp.status_code}")
-        return None
-
-    def get_visits_time_window(self, item_id: str, last=30, unit="day"):
-        """
-        Fetch visits over a time window.
-        URL: /items/{item_id}/visits/time_window?last=30&unit=day
-        Returns: {
-            "item_id": "MLB...",
-            "date_from": "...",
-            "date_to": "...",
-            "unit": "day",
-            "results": [
-                {"date": "2025-12-01T00:00:00Z", "visits": 10},
-                ...
-            ]
-        }
-        """
-        url = f"{self.base_url}/items/{item_id}/visits/time_window"
-        params = {"last": last, "unit": unit}
-        resp = requests.get(url, headers=self.get_headers(), params=params)
-        
-        # Retry on 401 (token refresh) if needed
-        if resp.status_code == 401:
-             logger.warning("401 in get_visits. Refreshing...")
-             # Just return None for now or duplicate refresh logic. 
-             # Ideally _request method handles this wrapper.
-             # Sprint 2 MVP: Skip logic for now, SyncEngine handles batch fail.
-             pass
-
-        if resp.status_code == 200:
-            return resp.json()
-        
-        # Log error
-        # logger.warning(f"Visits fetch failed for {item_id}: {resp.status_code}")
+        """Fetch shipment details."""
+        resp = self.request('GET', f"/shipments/{shipment_id}")
+        if resp.status_code == 200: return resp.json()
         return None
 
     def get_fulfillment_stock(self, inventory_id: str):
@@ -540,9 +366,8 @@ class MeliApiService:
         Fetch detailed fulfillment stock, including 'transfer' (incoming) status.
         Endpoint: /inventories/{inventory_id}/stock/fulfillment
         """
-        url = f"{self.base_url}/inventories/{inventory_id}/stock/fulfillment"
         try:
-             resp = requests.get(url, headers=self.get_headers(), timeout=15)
+             resp = self.request('GET', f"/inventories/{inventory_id}/stock/fulfillment")
              if resp.status_code == 200:
                  return resp.json()
              elif resp.status_code in [404, 400]:
