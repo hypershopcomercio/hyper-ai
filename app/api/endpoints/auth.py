@@ -194,7 +194,7 @@ def login():
         
         token = generate_token(user.id, user.email, user.role)
         
-        return jsonify({
+        response = jsonify({
             "success": True,
             "data": {
                 "token": token,
@@ -206,6 +206,18 @@ def login():
                 }
             }
         })
+
+        # Configurar Cookie de Autenticação
+        response.set_cookie(
+            key="auth_token",
+            value=token,
+            httponly=True,  # Segurança: impede que scripts maliciosos leiam o token
+            secure=True,    # Segurança: só envia via HTTPS
+            samesite="Lax",
+            max_age=24 * 3600  # 24 horas
+        )
+        
+        return response
         
     except Exception as e:
         logger.error(f"Login error: {e}")
