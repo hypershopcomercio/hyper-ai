@@ -4,7 +4,7 @@ import logging
 import requests
 import time
 from datetime import datetime
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.dialects.mysql import insert
 from app.services.meli_auth import MeliAuthService
 from app.core.database import SessionLocal
 from app.models.ad import Ad
@@ -240,10 +240,7 @@ class MeliSyncService:
         # We exclude 'id' from set_
         update_dict = {k: v for k, v in data.items() if k != "id"}
         
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["id"], # Ad.id
-            set_=update_dict
-        )
+        stmt = stmt.on_duplicate_key_update(**update_dict)
         
         db.execute(stmt)
         # Handle Variations
@@ -288,8 +285,6 @@ class MeliSyncService:
             
             # Upsert Variation
             stmt = insert(AdVariation).values(**v_data)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["id"],
-                set_={k: v for k, v in v_data.items() if k != "id"}
-            )
+            update_v_dict = {k: v for k, v in v_data.items() if k != "id"}
+            stmt = stmt.on_duplicate_key_update(**update_v_dict)
             db.execute(stmt)

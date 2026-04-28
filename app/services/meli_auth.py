@@ -52,7 +52,7 @@ class MeliAuthService:
         Save or update tokens in the database using Upsert.
         """
         db = SessionLocal()
-        from sqlalchemy.dialects.postgresql import insert
+        from sqlalchemy.dialects.mysql import insert
         
         try:
             user_id = str(token_data.get("user_id"))
@@ -88,10 +88,7 @@ class MeliAuthService:
                 "seller_id": data["seller_id"]
             }
             
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["provider"], 
-                set_=update_dict
-            )
+            stmt = stmt.on_duplicate_key_update(**update_dict)
             
             db.execute(stmt)
             db.commit()

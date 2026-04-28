@@ -3,7 +3,7 @@ import logging
 import requests
 import time
 from datetime import datetime, timedelta, date
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.dialects.mysql import insert
 from app.services.meli_auth import MeliAuthService
 from app.core.database import SessionLocal
 from app.models.ad import Ad
@@ -171,7 +171,7 @@ class MeliMetricsService:
         return results
 
     def _upsert_metric(self, db, ad_id, date_obj, visits=None, sales=None, revenue=None, conversion=None):
-        from sqlalchemy.dialects.postgresql import insert
+        from sqlalchemy.dialects.mysql import insert
         
         # Prepare data
         data = {
@@ -211,10 +211,7 @@ class MeliMetricsService:
         if not update_dict:
             return # Nothing to update
             
-        stmt = stmt.on_conflict_do_update(
-            constraint='uq_ad_date', # Named constraint in model
-            set_=update_dict
-        )
+        stmt = stmt.on_duplicate_key_update(**update_dict)
         
         try:
             db.execute(stmt)
