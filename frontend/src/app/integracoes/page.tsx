@@ -182,7 +182,7 @@ export default function IntegrationsPage() {
     }
 
     return (
-        <div className="container mx-auto px-6 py-6 max-w-7xl space-y-8">
+        <div className="container mx-auto px-6 py-6 max-w-7xl space-y-8" translate="no">
             <div className="mb-6">
                 <h2 className="text-2xl font-bold text-[#1E3A5F] dark:text-white">Integrações marketplace</h2>
                 <p className="text-zinc-500 text-sm">Gerencie suas conexões com plataformas de venda e ERPs.</p>
@@ -201,11 +201,11 @@ export default function IntegrationsPage() {
                                     </span>
                                 )}
                                 {mlStatus?.connected ? (
-                                    <span className="px-2 py-1 bg-[#2ECC71]/10 text-[#2ECC71] text-xs font-semibold rounded-full border border-[#2ECC71]/20 flex items-center gap-1">
+                                    <span key="ml-connected" className="px-2 py-1 bg-[#2ECC71]/10 text-[#2ECC71] text-xs font-semibold rounded-full border border-[#2ECC71]/20 flex items-center gap-1">
                                         <CheckCircle2 className="w-3 h-3" /> Conectado
                                     </span>
                                 ) : (
-                                    <span className="px-2 py-1 bg-[#E74C3C]/10 text-[#E74C3C] text-xs font-semibold rounded-full border border-[#E74C3C]/20 flex items-center gap-1">
+                                    <span key="ml-disconnected" className="px-2 py-1 bg-[#E74C3C]/10 text-[#E74C3C] text-xs font-semibold rounded-full border border-[#E74C3C]/20 flex items-center gap-1">
                                         <AlertCircle className="w-3 h-3" /> Desconectado
                                     </span>
                                 )}
@@ -282,11 +282,11 @@ export default function IntegrationsPage() {
                                     </span>
                                 )}
                                 {tinyStatus?.connected || tinyStatus?.has_token ? (
-                                    <span className="px-2 py-1 bg-[#2ECC71]/10 text-[#2ECC71] text-xs font-semibold rounded-full border border-[#2ECC71]/20 flex items-center gap-1">
+                                    <span key="tiny-connected" className="px-2 py-1 bg-[#2ECC71]/10 text-[#2ECC71] text-xs font-semibold rounded-full border border-[#2ECC71]/20 flex items-center gap-1">
                                         <CheckCircle2 className="w-3 h-3" /> Ativo
                                     </span>
                                 ) : (
-                                    <span className="px-2 py-1 bg-[#F39C12]/10 text-[#F39C12] text-xs font-semibold rounded-full border border-[#F39C12]/20 flex items-center gap-1">
+                                    <span key="tiny-disconnected" className="px-2 py-1 bg-[#F39C12]/10 text-[#F39C12] text-xs font-semibold rounded-full border border-[#F39C12]/20 flex items-center gap-1">
                                         <AlertCircle className="w-3 h-3" /> Configurar
                                     </span>
                                 )}
