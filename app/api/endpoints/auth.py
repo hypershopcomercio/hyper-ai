@@ -105,7 +105,7 @@ def handle_callback():
                     <div class="icon">✓</div>
                     <h1>Autenticação Concluída!</h1>
                     <p>Sua conta do Mercado Livre foi conectada com sucesso.</p>
-                    <a href="http://localhost:3000">Voltar ao Sistema</a>
+                    <a href="/integracoes">Voltar ao Sistema</a>
                 </div>
             </body>
             </html>
