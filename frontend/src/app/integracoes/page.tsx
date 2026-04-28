@@ -226,6 +226,14 @@ export default function IntegrationsPage() {
 
                     <div className="flex flex-col gap-3 mt-4">
                         <button
+                            onClick={() => { window.location.href = "/api/auth/ml" }}
+                            className="w-full h-10 text-black text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 whitespace-nowrap bg-[#FFE600] hover:bg-[#F3CE00] cursor-pointer"
+                        >
+                            <Key size={14} />
+                            {mlStatus?.connected ? 'Re-autenticar Conta' : 'Conectar Mercado Livre'}
+                        </button>
+
+                        <button
                             onClick={handleSyncML}
                             disabled={mlStatus?.syncing}
                             className={`w-full h-10 text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 whitespace-nowrap ${mlStatus?.syncing
