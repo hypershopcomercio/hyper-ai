@@ -91,8 +91,8 @@ export default function IntegrationsPage() {
 
         const toastId = toast.loading("Salvando token...");
         try {
-            await api.post("/settings", {
-                "TINY_API_TOKEN": tinyToken
+            await api.put("/settings/integracoes", {
+                "tiny_api_token": tinyToken
             });
 
             toast.success("Token do Tiny salvo com sucesso!", { id: toastId });
