@@ -481,30 +481,60 @@ def get_dashboard_metrics():
         # Only fetch ads for items we sold
         if all_item_ids:
             try:
-                # Use the new MlAdsMetric database table instead of hitting API
-                from app.models.ml_ads_metrics import MlAdsMetric
+                # Fetch Ad metrics for these items in the period
+                meli_service = MeliApiService(db)
+                d_from = start_date_br.strftime('%Y-%m-%d')
+                d_to = end_date_br.strftime('%Y-%m-%d')
                 
-                ads_q = db.query(
-                    func.sum(MlAdsMetric.cost).label('total_cost'),
-                    func.sum(MlAdsMetric.revenue).label('total_revenue')
-                )
+                # Fetch for all items to be safe/complete
+                cache_key = f"ads_cache_{d_from}_{d_to}"
+                from app.models.system_config import SystemConfig
+                import json
                 
-                if start_date_br:
-                    ads_q = ads_q.filter(MlAdsMetric.date >= start_date_br.date())
-                if end_date_br:
-                    if should_be_inclusive:
-                        ads_q = ads_q.filter(MlAdsMetric.date <= end_date_br.date())
-                    else:
-                        ads_q = ads_q.filter(MlAdsMetric.date < end_date_br.date())
-                        
-                res = ads_q.first()
-                if res:
-                    ads_cost_7d = float(res.total_cost or 0)
-                    revenue_ads = float(res.total_revenue or 0)
-                    
+                ads_data = []
+                sc = db.query(SystemConfig).filter_by(key=cache_key).first()
+                # Use 15 minute cache for Today, 60 minutes for others
+                cache_time = 900 if days_param in ['1', 'hoje', 'today'] else 3600
+                
+                if sc and sc.value:
+                    try:
+                        cached_obj = json.loads(sc.value)
+                        cached_ts = cached_obj.get("timestamp", 0)
+                        if (datetime.now().timestamp() - cached_ts) < cache_time:
+                            ads_data = cached_obj.get("data", [])
+                    except:
+                        ads_data = []
+                
+                if not ads_data:
+                    # Cache miss or expired, fetch from API
+                    ads_data = meli_service.get_ads_performance(None, d_from, d_to)
+                    if ads_data:
+                        if not sc:
+                            sc = SystemConfig(key=cache_key, group='cache')
+                            db.add(sc)
+                        sc.value = json.dumps({
+                            "timestamp": datetime.now().timestamp(),
+                            "data": ads_data
+                        })
+                        db.commit()
+                
+                if ads_data:
+                    for row in ads_data:
+                        if isinstance(row, dict):
+                            r_amount = float(row.get('amount') or 0)
+                            r_cost = float(row.get('cost') or 0)
+                            r_item_id = row.get('item_id')
+                            
+                            revenue_ads += r_amount
+                            ads_cost_7d += r_cost
+
+                            if r_item_id and r_item_id in item_sold_qty_map:
+                                sold_qty = item_sold_qty_map[r_item_id]
+                                if sold_qty > 0:
+                                    ads_cost_per_unit_map[r_item_id] = r_cost / sold_qty
             except Exception as e:
                 # IMPORTANT: Do not crash dashboard if Ads fail
-                print(f"[ERROR] Ads Database Query CRASHED: {e}")
+                print(f"[ERROR] Ads Fetch CRASHED: {e}")
                 pass
 
         
