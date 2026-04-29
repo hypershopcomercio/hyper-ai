@@ -311,8 +311,8 @@ def trigger_quick_sync():
         try:
             # SyncEngine creates its own session internally if needed
             engine = SyncEngine() 
-            # Sync recent orders (last 2 hours)
-            engine.sync_orders_incremental(lookback_hours=2)
+            # Sync recent orders (last 48 hours to recover any downtime gaps)
+            engine.sync_orders_incremental(lookback_hours=48)
             # Sync visits
             engine.sync_visits()
         except Exception as e:
@@ -356,7 +356,7 @@ def trigger_quick_sync():
 
         # Run Blocking (Legacy/Forced)
         engine = SyncEngine()
-        engine.sync_orders_incremental(lookback_hours=2)
+        engine.sync_orders_incremental(lookback_hours=48)
         engine.sync_visits()
         
         return jsonify({"message": "Quick sync completed", "success": True}), 200
