@@ -98,7 +98,6 @@ class IncrementalSyncService:
                     "seller": seller_id,
                     "order.date_last_updated.from": date_from,
                     "order.date_last_updated.to": date_to,
-                    "sort": "date_asc", # Process oldest changes first
                     "offset": offset,
                     "limit": BATCH_SIZE
                 }

@@ -267,7 +267,20 @@ def update_settings_group(group: str):
         data = request.get_json()
         
         for key, value in data.items():
-            if isinstance(value, bool):
+            if key == "tiny_api_token":
+                from app.models.oauth_token import OAuthToken
+                from datetime import datetime
+                # Fetch or create OAuthToken for Tiny
+                tiny_token = db.query(OAuthToken).filter_by(provider="tiny").first()
+                if not tiny_token:
+                    tiny_token = OAuthToken(provider="tiny", user_id=1, access_token=str(value), updated_at=datetime.now())
+                    db.add(tiny_token)
+                else:
+                    tiny_token.access_token = str(value)
+                    tiny_token.updated_at = datetime.now()
+                # Also save to SystemConfig for consistency with GET /settings/integracoes
+                str_value = str(value)
+            elif isinstance(value, bool):
                 str_value = 'true' if value else 'false'
             elif isinstance(value, (list, dict)):
                 str_value = json.dumps(value)

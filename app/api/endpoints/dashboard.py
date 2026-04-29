@@ -487,7 +487,36 @@ def get_dashboard_metrics():
                 d_to = end_date_br.strftime('%Y-%m-%d')
                 
                 # Fetch for all items to be safe/complete
-                ads_data = meli_service.get_ads_performance(None, d_from, d_to)
+                cache_key = f"ads_cache_{d_from}_{d_to}"
+                from app.models.system_config import SystemConfig
+                import json
+                
+                ads_data = []
+                sc = db.query(SystemConfig).filter_by(key=cache_key).first()
+                # Use 15 minute cache for Today, 60 minutes for others
+                cache_time = 900 if days_param in ['1', 'hoje', 'today'] else 3600
+                
+                if sc and sc.value:
+                    try:
+                        cached_obj = json.loads(sc.value)
+                        cached_ts = cached_obj.get("timestamp", 0)
+                        if (datetime.now().timestamp() - cached_ts) < cache_time:
+                            ads_data = cached_obj.get("data", [])
+                    except:
+                        ads_data = []
+                
+                if not ads_data:
+                    # Cache miss or expired, fetch from API
+                    ads_data = meli_service.get_ads_performance(None, d_from, d_to)
+                    if ads_data:
+                        if not sc:
+                            sc = SystemConfig(key=cache_key, group='cache')
+                            db.add(sc)
+                        sc.value = json.dumps({
+                            "timestamp": datetime.now().timestamp(),
+                            "data": ads_data
+                        })
+                        db.commit()
                 
                 if ads_data:
                     for row in ads_data:

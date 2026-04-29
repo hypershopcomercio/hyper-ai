@@ -230,6 +230,8 @@ def get_sync_status():
         # Override the legacy last_log_ml timestamp if we found a newer job
         if final_last_sync:
              last_sync_iso = final_last_sync.isoformat()
+             if not last_sync_iso.endswith('Z') and '+' not in last_sync_iso:
+                 last_sync_iso += 'Z'
         else:
              last_sync_iso = None
 
