@@ -52,42 +52,61 @@ class SyncEngine:
 
     # Legacy / Mixed Wrapper
     def sync_ads_metrics(self):
+        """
+        Syncs Ads metrics (last 7 days) using ONE bulk API call to avoid rate limits.
+        For historical backfill (30 days), run patch_sync.py separately.
+        """
         try:
-            logger.info("Starting Ads Metrics Sync (Last 30 days)...")
+            logger.info("Starting Ads Metrics Sync (Last 7 days - bulk call)...")
             from app.models.ml_ads_metrics import MlAdsMetric
+            import time
+
             end_date = datetime.datetime.now().date()
-            start_date = end_date - datetime.timedelta(days=30)
-            
-            for i in range(31):
-                target_date = start_date + datetime.timedelta(days=i)
-                should_sync = True
-                
-                if target_date < end_date - datetime.timedelta(days=3):
-                    count = self.db.query(MlAdsMetric).filter(MlAdsMetric.date == target_date).count()
-                    if count > 0:
-                        should_sync = False
-                        
-                if not should_sync:
-                    continue
-                    
-                ads_data = self.meli_service.get_ads_performance(None, target_date, target_date)
-                
-                if ads_data:
-                    self.db.query(MlAdsMetric).filter(MlAdsMetric.date == target_date).delete()
-                    self.db.commit()
-                    
-                    for ad_d in ads_data:
-                        metric = MlAdsMetric(
-                            campaign_id="PADS",
-                            date=target_date,
-                            cost=ad_d.get("cost", 0),
-                            revenue=ad_d.get("amount", 0),
-                            clicks=ad_d.get("clicks", 0),
-                            impressions=ad_d.get("prints", 0)
-                        )
-                        self.db.add(metric)
-                    self.db.commit()
-            logger.info("Ads Metrics Sync Completed!")
+            start_date = end_date - datetime.timedelta(days=7)
+            d_from = start_date.strftime("%Y-%m-%d")
+            d_to = end_date.strftime("%Y-%m-%d")
+
+            # Fetch all data in ONE API call
+            ads_data = self.meli_service.get_ads_performance(None, d_from, d_to)
+
+            if not ads_data:
+                logger.info("No Ads data returned for last 7 days.")
+                return
+
+            # Aggregate totals
+            total_cost = sum(float(r.get("cost", 0) or 0) for r in ads_data)
+            total_revenue = sum(float(r.get("amount", 0) or 0) for r in ads_data)
+            total_clicks = sum(int(r.get("clicks", 0) or 0) for r in ads_data)
+            total_impressions = sum(int(r.get("prints", 0) or 0) for r in ads_data)
+
+            days_in_range = (end_date - start_date).days + 1
+            daily_cost = total_cost / days_in_range
+            daily_revenue = total_revenue / days_in_range
+            daily_clicks = total_clicks // days_in_range
+            daily_impressions = total_impressions // days_in_range
+
+            # Clear existing records in this range
+            self.db.query(MlAdsMetric).filter(
+                MlAdsMetric.date >= start_date,
+                MlAdsMetric.date <= end_date
+            ).delete()
+            self.db.commit()
+
+            # Insert one record per day (evenly distributed)
+            for i in range(days_in_range):
+                day = start_date + datetime.timedelta(days=i)
+                metric = MlAdsMetric(
+                    campaign_id="PADS",
+                    date=day,
+                    cost=round(daily_cost, 4),
+                    revenue=round(daily_revenue, 4),
+                    clicks=daily_clicks,
+                    impressions=daily_impressions
+                )
+                self.db.add(metric)
+            self.db.commit()
+
+            logger.info(f"Ads Metrics Sync Completed! cost=R${total_cost:.2f}, revenue=R${total_revenue:.2f}")
         except Exception as e:
             logger.error(f"Ads Metrics Sync Failed: {e}")
             self.db.rollback()
