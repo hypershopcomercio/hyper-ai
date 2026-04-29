@@ -63,6 +63,25 @@ scheduler.add_job(func=run_threat_score_calculation, trigger="cron", hour=1, min
 scheduler.start()
 logger.info("Scheduler started: Forecast + Competitor Intelligence (Hourly :05, :10, :15, :20 + Daily 00:00, 01:00, 04:00, 23:55)")
 
+# Initialize Webhook Processor
+from app.api.endpoints.webhooks import webhook_queue
+from app.services.webhook_processor import init_processor
+from app.services.meli_api import MeliApiService
+
+def db_factory():
+    return SessionLocal()
+
+def meli_factory(db):
+    return MeliApiService(db_session=db)
+
+try:
+    processor = init_processor(webhook_queue, db_factory, meli_factory)
+    processor.start()
+    logger.info("Webhook Processor started successfully")
+except Exception as e:
+    logger.error(f"Failed to start Webhook Processor: {e}")
+
+
 
 
 @app.route("/oauth/meli/callback", methods=["GET"])
