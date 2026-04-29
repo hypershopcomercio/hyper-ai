@@ -57,7 +57,7 @@ export default function DashboardPage() {
 
     // Trigger quick sync on mount to ensure fresh data
     useEffect(() => {
-        api.post('/jobs/trigger')
+        api.post('/jobs/trigger', { async: true })
             .then(() => {
                 // Refresh metrics after 1.5s to reflect new data
                 setTimeout(() => setRefreshKey(prev => prev + 1), 1500);

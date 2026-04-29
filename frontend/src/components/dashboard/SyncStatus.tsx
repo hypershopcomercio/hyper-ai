@@ -18,7 +18,7 @@ export function SyncStatus({ onDataRefresh, onNewSale }: SyncStatusProps) {
 
     // SSE for instant updates when available
     const { isConnected } = useSSE({
-        url: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'}/api/sse/updates`,
+        url: '/api/sse/updates',
         onEvent: (event) => {
             console.log('[SyncStatus] SSE event received:', event.type);
 
