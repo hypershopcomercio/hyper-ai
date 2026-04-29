@@ -880,11 +880,24 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
     
     orders = db.query(MlOrder).options(joinedload(MlOrder.items)).filter(MlOrder.date_closed >= start_dt, MlOrder.date_closed <= end_dt).all()
     
-    # Pre-load Ads and TinyProducts for cost lookup
+    # Pre-load Ads and TinyProducts only for items in these orders to save memory/time
+    item_ids = set()
+    skus = set()
+    for o in orders:
+        for item in o.items:
+            if item.ml_item_id: item_ids.add(item.ml_item_id)
+            if item.sku: skus.add(item.sku)
+            
     from app.models.ad import Ad
     from app.models.tiny_product import TinyProduct
-    ads_cache = {a.id: a for a in db.query(Ad).all()}
-    tiny_cache = {t.sku: t for t in db.query(TinyProduct).all()}
+    
+    ads_cache = {}
+    if item_ids:
+        ads_cache = {a.id: a for a in db.query(Ad).filter(Ad.id.in_(list(item_ids))).all()}
+    
+    tiny_cache = {}
+    if skus:
+        tiny_cache = {t.sku: t for t in db.query(TinyProduct).filter(TinyProduct.sku.in_(list(skus))).all()}
     
     current_total_so_far = 0.0
     
