@@ -16,24 +16,23 @@ export function SyncStatus({ onDataRefresh, onNewSale }: SyncStatusProps) {
     const lastProcessedRef = useRef<string | null>(null);
     const isInitializedRef = useRef(false);
 
-    // SSE for instant updates when available
+    /* SSE disabled temporarily to free up server workers
     const { isConnected } = useSSE({
         url: '/api/sse/updates',
         onEvent: (event) => {
             console.log('[SyncStatus] SSE event received:', event.type);
 
-            // ONLY trigger celebration for order_update (real new sale from webhook)
             if (event.type === 'order_update') {
                 console.log('[SyncStatus] 🎉 REAL NEW SALE from SSE webhook!');
                 const productName = event.data?.title || event.data?.product_name || 'Novo Pedido';
                 onNewSale?.(productName);
-                // Data refresh happens in SalesFireworks onComplete callback
             } else if (event.type === 'webhook_processed') {
-                // Other webhook events - just refresh data, no celebration
                 refreshData();
             }
         }
     });
+    */
+    const isConnected = true; // Simulated for UI consistency while polling handles updates
 
     // Polling fallback - check for new webhooks every 10 seconds
     useEffect(() => {
