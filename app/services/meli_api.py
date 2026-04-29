@@ -86,7 +86,7 @@ class MeliApiService:
     def get_headers(self):
         return {"Authorization": f"Bearer {self.access_token}"}
 
-    def request(self, method: str, endpoint: str, params: dict = None, json_data: dict = None):
+    def request(self, method: str, endpoint: str, params: dict = None, json_data: dict = None, timeout: int = 30, max_retries: int = 3):
         """
         Generic request method with automatic token refresh and 429 (Rate Limit) retry.
         Endpoint should be relative, e.g. '/orders/search'
@@ -94,13 +94,12 @@ class MeliApiService:
         import time
         url = f"{self.base_url}{endpoint}"
         
-        max_retries = 3
         retry_delay = 10 # seconds
         
         for attempt in range(max_retries + 1):
             try:
-                # Added timeout=30 to prevent hangs
-                resp = requests.request(method, url, headers=self.get_headers(), params=params, json=json_data, timeout=30)
+                # Use provided timeout
+                resp = requests.request(method, url, headers=self.get_headers(), params=params, json=json_data, timeout=timeout)
                 
                 # Handle Rate Limit (429)
                 if resp.status_code == 429:
@@ -332,9 +331,10 @@ class MeliApiService:
             if local_session:
                 db.close()
 
-    def get_ads_performance(self, item_ids: list[str] = None, date_from = None, date_to = None):
+    def get_ads_performance(self, item_ids: list[str] = None, date_from = None, date_to = None, fast=False):
         """
         Fetches Product Ads performance metrics for items.
+        If fast=True, uses a very short timeout and 0 retries (ideal for dashboard load).
         """
         advertiser_id = self.get_advertiser_id()
         if not advertiser_id: return []
@@ -352,11 +352,16 @@ class MeliApiService:
         
         all_results = []
         offset = 0
+        
+        # Override timeout/retries if fast mode is requested
+        request_timeout = 5 if fast else 30
+        request_retries = 0 if fast else 3
+        
         try:
             while True:
                 params["offset"] = offset
-                response = self.request('GET', endpoint, params=params)
-                if response.status_code != 200: break
+                response = self.request('GET', endpoint, params=params, timeout=request_timeout, max_retries=request_retries)
+                if not response or response.status_code != 200: break
                 
                 data = response.json()
                 results = data.get("results", [])

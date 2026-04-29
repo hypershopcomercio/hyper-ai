@@ -507,7 +507,7 @@ def get_dashboard_metrics():
                 
                 if not ads_data:
                     # Cache miss or expired, fetch from API
-                    ads_data = meli_service.get_ads_performance(None, d_from, d_to)
+                    ads_data = meli_service.get_ads_performance(None, d_from, d_to, fast=True)
                     if ads_data:
                         if not sc:
                             sc = SystemConfig(key=cache_key, group='cache')
