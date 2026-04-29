@@ -51,6 +51,47 @@ class SyncEngine:
         return settings.MELI_USER_ID
 
     # Legacy / Mixed Wrapper
+    def sync_ads_metrics(self):
+        try:
+            logger.info("Starting Ads Metrics Sync (Last 30 days)...")
+            from app.models.ml_ads_metrics import MlAdsMetric
+            end_date = datetime.datetime.now().date()
+            start_date = end_date - datetime.timedelta(days=30)
+            
+            for i in range(31):
+                target_date = start_date + datetime.timedelta(days=i)
+                should_sync = True
+                
+                if target_date < end_date - datetime.timedelta(days=3):
+                    count = self.db.query(MlAdsMetric).filter(MlAdsMetric.date == target_date).count()
+                    if count > 0:
+                        should_sync = False
+                        
+                if not should_sync:
+                    continue
+                    
+                ads_data = self.meli_service.get_ads_performance(None, target_date, target_date)
+                
+                if ads_data:
+                    self.db.query(MlAdsMetric).filter(MlAdsMetric.date == target_date).delete()
+                    self.db.commit()
+                    
+                    for ad_d in ads_data:
+                        metric = MlAdsMetric(
+                            campaign_id="PADS",
+                            date=target_date,
+                            cost=ad_d.get("cost", 0),
+                            revenue=ad_d.get("amount", 0),
+                            clicks=ad_d.get("clicks", 0),
+                            impressions=ad_d.get("prints", 0)
+                        )
+                        self.db.add(metric)
+                    self.db.commit()
+            logger.info("Ads Metrics Sync Completed!")
+        except Exception as e:
+            logger.error(f"Ads Metrics Sync Failed: {e}")
+            self.db.rollback()
+
     def sync_orders_incremental(self, lookback_hours: int = None):
         """
         Triggers the V2 Incremental Sync for orders.

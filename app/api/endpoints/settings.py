@@ -273,7 +273,8 @@ def update_settings_group(group: str):
                 # Fetch or create OAuthToken for Tiny
                 tiny_token = db.query(OAuthToken).filter_by(provider="tiny").first()
                 if not tiny_token:
-                    tiny_token = OAuthToken(provider="tiny", user_id=1, access_token=str(value), updated_at=datetime.now())
+                    # Provide empty refresh_token since it's nullable=False
+                    tiny_token = OAuthToken(provider="tiny", user_id="1", access_token=str(value), refresh_token="", updated_at=datetime.now())
                     db.add(tiny_token)
                 else:
                     tiny_token.access_token = str(value)
