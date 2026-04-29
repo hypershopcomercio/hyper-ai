@@ -188,27 +188,18 @@ class InitialLoadService:
         shipping_id = parsed.get("shipping_id")
         shipping_cost = 0.0
         
-        # Check if we have Meli Service available. 
-        # If not, we might skip this for bulk load (performance) but do it for single syncs.
-        if hasattr(self, 'meli_client') and self.meli_client and shipping_id:
+        # Performance: If order exists and has cost, skip API call
+        if existing and existing.shipping_cost and float(existing.shipping_cost) > 0:
+            shipping_cost = float(existing.shipping_cost)
+        elif hasattr(self, 'meli_client') and self.meli_client and shipping_id and shipping_id != 'None':
             try:
                 shipment = self.meli_client.get_shipment(shipping_id)
                 if shipment:
-                    # Look for list_cost (what seller pays) or cost
-                    # Structure varies: "shipping_option": { "list_cost": ... }
                     so = shipment.get("shipping_option", {})
-                    # If free shipping (seller pays), usually list_cost > 0.
-                    # Or check "base_cost".
                     cost = float(so.get("list_cost", 0) or so.get("cost", 0))
-                    
-                    # Verify who pays? "shipping_mode"?
-                    # If "free_shipping" is true in shipment?
-                    # "free_shipping": True
                     if shipment.get("free_shipping"):
                          shipping_cost = cost
-            except Exception as e:
-                # logger.warning(f"Failed to fetch shipment {shipping_id}: {e}")
-                pass
+            except: pass
         
         parsed["shipping_cost"] = shipping_cost
 

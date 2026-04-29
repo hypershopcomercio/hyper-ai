@@ -126,6 +126,7 @@ def get_dashboard_metrics():
         try:
             # 2. Visits
             visits_current = 0
+            # Use start_date_br.date() for local day boundary
             q_visits = db.query(func.sum(MlMetricsDaily.visits)).filter(MlMetricsDaily.date >= start_date_br.date())
             
             if end_date_br:
@@ -139,7 +140,8 @@ def get_dashboard_metrics():
                  else:
                       q_visits = q_visits.filter(MlMetricsDaily.date < end_date_br.date())
                       
-            visits_current = q_visits.scalar() or 0
+            res_scalar = q_visits.scalar()
+            visits_current = int(res_scalar) if res_scalar is not None else 0
         except Exception as e:
             print(f"[DASHBOARD_DEBUG] Visits Query Failed: {e}")
             visits_current = 0
@@ -148,13 +150,16 @@ def get_dashboard_metrics():
             q_prev = db.query(func.sum(MlMetricsDaily.visits)).filter(MlMetricsDaily.date >= prev_start_date_br.date())
             if prev_end_date_br:
                 q_prev = q_prev.filter(MlMetricsDaily.date < prev_end_date_br.date())
-            visits_prev = q_prev.scalar() or 0
+            res_prev_scalar = q_prev.scalar()
+            visits_prev = int(res_prev_scalar) if res_prev_scalar is not None else 0
         except:
             visits_prev = 0
         
         visits_trend = 0.0
         if visits_prev > 0:
-            visits_trend = ((visits_current - visits_prev) / visits_prev) * 100
+            visits_trend = ((float(visits_current) - float(visits_prev)) / float(visits_prev)) * 100
+        elif visits_current > 0:
+            visits_trend = 100.0
 
         # 3. Revenue & Sales (Orders)
         # Using date_closed for accurate accounting (matches ML "Approved" date)
@@ -162,17 +167,16 @@ def get_dashboard_metrics():
         
         q_orders = db.query(MlOrder).options(joinedload(MlOrder.items))
         
-        # Determine which date field to use
-        # For "Sales", ML uses Approval Date.
-        # Ensure we filter by date_closed if using time window.
+        # Use date_created for volume metrics to match ML panel expectation (Sales counted on day created)
+        # but filter for status that implies it was actually a sale (not pending).
         
         if start_date_utc:
-            q_orders = q_orders.filter(MlOrder.date_closed >= start_date_utc)
+            q_orders = q_orders.filter(MlOrder.date_created >= start_date_utc)
         if end_date_utc:
-            q_orders = q_orders.filter(MlOrder.date_closed < end_date_utc)
+            q_orders = q_orders.filter(MlOrder.date_created < end_date_utc)
             
-        # Default Sorting: Newest First (Date Closed Desc)
-        q_orders = q_orders.order_by(MlOrder.date_closed.desc())
+        # Default Sorting: Newest First
+        q_orders = q_orders.order_by(MlOrder.date_created.desc())
             
         curr_orders = q_orders.all()
         # logging to file for debug

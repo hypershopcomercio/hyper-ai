@@ -133,6 +133,10 @@ class IncrementalSyncService:
                         failed += 1
                         
                     total_processed += 1
+                    
+                    # Log progress every batch
+                    if total_processed % 50 == 0:
+                        logger.info(f"[Incremental] Progress: {total_processed} orders processed...")
                 
                 self.db.commit()
                 offset += len(orders)
