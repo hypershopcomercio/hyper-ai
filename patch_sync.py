@@ -47,6 +47,10 @@ def sync_ads_metrics(self):
         self.db.rollback()
 
 if __name__ == "__main__":
+    from app.core.database import engine, Base
+    import app.models.ml_ads_metrics
+    Base.metadata.create_all(bind=engine)
+    
     SyncEngine.sync_ads_metrics = sync_ads_metrics
     e = SyncEngine()
     e.sync_ads_metrics()
