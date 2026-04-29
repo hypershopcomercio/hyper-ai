@@ -279,64 +279,58 @@ class MeliApiService:
     def get_advertiser_id(self):
         """
         Gets the advertiser_id for Product Ads.
-        Cached in SystemConfig to avoid repeated API calls (rate limit).
+        Priority: DB cache -> oauth_tokens seller_id -> API call (last resort).
+        For ML PADS, advertiser_id == seller_id.
         """
-        # 1. Try cache in DB first
         db = self.db_session
         local_session = False
         if not db:
             from app.core.database import SessionLocal
             db = SessionLocal()
             local_session = True
-        
+
         try:
             from app.models.system_config import SystemConfig
+
+            # 1. Check cache
             cached = db.query(SystemConfig).filter_by(key="ml_advertiser_id").first()
             if cached and cached.value:
-                logger.debug(f"Using cached advertiser_id: {cached.value}")
                 return cached.value
-        except Exception:
-            pass
-        finally:
-            if local_session:
-                db.close()
-                local_session = False
-                db = None
 
-        # 2. Not cached - fetch from API once
-        try:
+            # 2. Use seller_id from oauth_tokens (no API call needed)
+            token = db.query(OAuthToken).filter_by(provider="mercadolivre").first()
+            if token and (token.seller_id or token.user_id):
+                advertiser_id = str(token.seller_id or token.user_id)
+                # Cache it
+                if cached:
+                    cached.value = advertiser_id
+                else:
+                    db.add(SystemConfig(key="ml_advertiser_id", value=advertiser_id, group="cache"))
+                db.commit()
+                logger.info(f"Cached advertiser_id={advertiser_id} from oauth_tokens.")
+                return advertiser_id
+
+            # 3. Last resort: API call
             response = self.request('GET', "/advertising/advertisers", params={"product_id": "PADS"})
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 advertisers = response.json().get("advertisers", [])
                 if advertisers:
                     advertiser_id = str(advertisers[0].get("advertiser_id"))
-                    # Save to cache in DB
-                    db2 = self.db_session
-                    local2 = False
-                    if not db2:
-                        from app.core.database import SessionLocal
-                        db2 = SessionLocal()
-                        local2 = True
-                    try:
-                        from app.models.system_config import SystemConfig
-                        existing = db2.query(SystemConfig).filter_by(key="ml_advertiser_id").first()
-                        if existing:
-                            existing.value = advertiser_id
-                        else:
-                            db2.add(SystemConfig(key="ml_advertiser_id", value=advertiser_id, group="cache"))
-                        db2.commit()
-                        logger.info(f"Cached advertiser_id={advertiser_id} in SystemConfig.")
-                    except Exception as e:
-                        logger.warning(f"Could not cache advertiser_id: {e}")
-                    finally:
-                        if local2:
-                            db2.close()
+                    if cached:
+                        cached.value = advertiser_id
+                    else:
+                        db.add(SystemConfig(key="ml_advertiser_id", value=advertiser_id, group="cache"))
+                    db.commit()
                     return advertiser_id
-            logger.error(f"get_advertiser_id API returned {response.status_code}")
+
+            logger.error("Could not determine advertiser_id from any source.")
             return None
         except Exception as e:
             logger.error(f"Error getting advertiser_id: {e}")
             return None
+        finally:
+            if local_session:
+                db.close()
 
     def get_ads_performance(self, item_ids: list[str] = None, date_from = None, date_to = None):
         """
