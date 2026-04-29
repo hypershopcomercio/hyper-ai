@@ -123,44 +123,34 @@ def get_dashboard_metrics():
         # 1. Total Ads
         total_ads = db.query(Ad).filter(Ad.status == 'active').count()
 
-        # 2. Visits
-        visits_current = 0
-        q_visits = db.query(func.sum(MlMetricsDaily.visits)).filter(MlMetricsDaily.date >= start_date_br.date())
-        
-        # Logic Fix for "Today":
-        # If period is Today, end_date_br.date() is Today. date < Today excludes Today.
-        # We should use <= if we want inclusive, or ensure end_date is Exclusive (Tomorrow).
-        # Existing logic uses < end_date_br.date().
-        # For "Today" param, let's just NOT apply upper bound or apply correct one.
-        
-        if end_date_br:
-             # Logic Check:
-             # If end_date is Today (Realtime), we want Inclusive (<=).
-             # If end_date is a defined period end (e.g. Last Month end which is 1st of curr), we want Exclusive (<).
-             
-             is_today_end = (end_date_br.date() == now_br.date())
-             
-             # inclusive_periods: 1 (Today), 7 (Last 7 Days), current_month
-             # exclusive_periods: 0 (Yesterday), 30 (Last 30 Days - maybe inclusive?), last_month
-             
-             should_be_inclusive = False
-             if days_param in ['1', '7', 'current_month'] and is_today_end:
-                 should_be_inclusive = True
-             
-             if should_be_inclusive:
-                 # Inclusive of Today
-                 q_visits = q_visits.filter(MlMetricsDaily.date <= end_date_br.date())
-             else:
-                 # Exclusive (Strictly before end date)
-                 # This is crucial for "Yesterday" where end_date is Today, but we want < Today.
-                 q_visits = q_visits.filter(MlMetricsDaily.date < end_date_br.date())
+        try:
+            # 2. Visits
+            visits_current = 0
+            q_visits = db.query(func.sum(MlMetricsDaily.visits)).filter(MlMetricsDaily.date >= start_date_br.date())
+            
+            if end_date_br:
+                 is_today_end = (end_date_br.date() == now_br.date())
+                 should_be_inclusive = False
+                 if days_param in ['1', '7', 'current_month'] and is_today_end:
+                     should_be_inclusive = True
                  
-        visits_current = q_visits.scalar() or 0
-        
-        q_prev = db.query(func.sum(MlMetricsDaily.visits)).filter(MlMetricsDaily.date >= prev_start_date_br.date())
-        if prev_end_date_br:
-            q_prev = q_prev.filter(MlMetricsDaily.date < prev_end_date_br.date())
-        visits_prev = q_prev.scalar() or 0
+                 if should_be_inclusive:
+                      q_visits = q_visits.filter(MlMetricsDaily.date <= end_date_br.date())
+                 else:
+                      q_visits = q_visits.filter(MlMetricsDaily.date < end_date_br.date())
+                      
+            visits_current = q_visits.scalar() or 0
+        except Exception as e:
+            print(f"[DASHBOARD_DEBUG] Visits Query Failed: {e}")
+            visits_current = 0
+
+        try:
+            q_prev = db.query(func.sum(MlMetricsDaily.visits)).filter(MlMetricsDaily.date >= prev_start_date_br.date())
+            if prev_end_date_br:
+                q_prev = q_prev.filter(MlMetricsDaily.date < prev_end_date_br.date())
+            visits_prev = q_prev.scalar() or 0
+        except:
+            visits_prev = 0
         
         visits_trend = 0.0
         if visits_prev > 0:
@@ -188,9 +178,12 @@ def get_dashboard_metrics():
         # logging to file for debug
         try:
             with open("debug_log.txt", "a") as f:
-                f.write(f"\n[DEBUG] {datetime.now()} - Loaded {len(curr_orders)} orders for period {days_param}\n")
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                f.write(f"\n[DEBUG] {ts} - Dashboard Access - Period: {days_param}\n")
                 f.write(f"[DEBUG] StartUTC: {start_date_utc}, EndUTC: {end_date_utc}\n")
-        except: pass
+                f.write(f"[DEBUG] Orders Found: {len(curr_orders)}\n")
+        except Exception as e:
+             print(f"Logging failed: {e}")
         
         curr_gross = 0.0
         curr_cancelled = 0.0

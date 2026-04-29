@@ -126,7 +126,11 @@ class MeliApiService:
                         token_record = db.query(OAuthToken).filter(OAuthToken.provider == "mercadolivre").first()
                         if token_record:
                             self.access_token = self._refresh_token(db, token_record)
-                            # Let the loop retry once more with the new token
+                            # Special case: allow ONE more attempt after refresh even if max_retries is 0
+                            if attempt >= max_retries:
+                                logger.info(f"Retrying {endpoint} once more after token refresh (fast mode override).")
+                                resp = requests.request(method, url, headers=self.get_headers(), params=params, json=json_data, timeout=timeout)
+                                return resp
                             continue
                         else:
                             logger.error("No token to refresh.")
@@ -275,7 +279,7 @@ class MeliApiService:
         if resp.status_code == 200: return resp.json()
         return None
 
-    def get_advertiser_id(self):
+    def get_advertiser_id(self, fast=False):
         """
         Gets the advertiser_id for Product Ads.
         Priority: DB cache -> oauth_tokens seller_id -> API call (last resort).
@@ -309,7 +313,11 @@ class MeliApiService:
                 logger.info(f"Cached advertiser_id={advertiser_id} from oauth_tokens.")
                 return advertiser_id
 
-            # 3. Last resort: API call
+            # 3. Last resort: API call (skip if fast mode)
+            if fast:
+                logger.warning("get_advertiser_id: Fast mode enabled and no cache/token found. Skipping API call.")
+                return None
+
             response = self.request('GET', "/advertising/advertisers", params={"product_id": "PADS"})
             if response and response.status_code == 200:
                 advertisers = response.json().get("advertisers", [])
@@ -336,7 +344,7 @@ class MeliApiService:
         Fetches Product Ads performance metrics for items.
         If fast=True, uses a very short timeout and 0 retries (ideal for dashboard load).
         """
-        advertiser_id = self.get_advertiser_id()
+        advertiser_id = self.get_advertiser_id(fast=fast)
         if not advertiser_id: return []
         
         endpoint = f"/advertising/MLB/advertisers/{advertiser_id}/product_ads/ads/search"
