@@ -261,19 +261,24 @@ export function SalesTable({ data, isLoading }: SalesTableProps) {
                                         {/* Costs Breakdown */}
                                         <td className="px-4 py-3 text-right whitespace-nowrap">
                                             {editingId === `${item.order_id}-${idx}` ? (
-                                                <div className="flex items-center justify-end gap-1">
+                                                <div className="flex items-center justify-end relative">
                                                     <input
                                                         autoFocus
-                                                        type="number"
-                                                        step="0.01"
+                                                        type="text"
                                                         value={editValue}
-                                                        onChange={(e) => setEditValue(e.target.value)}
+                                                        onChange={(e) => setEditValue(e.target.value.replace(/[^0-9.]/g, ''))}
+                                                        onBlur={() => handleSaveCost(item.ml_item_id || '', item.sku)}
                                                         onKeyDown={(e) => {
                                                             if (e.key === 'Enter') handleSaveCost(item.ml_item_id || '', item.sku);
                                                             if (e.key === 'Escape') setEditingId(null);
                                                         }}
-                                                        className="w-16 bg-slate-800 border border-emerald-500/50 rounded px-1 py-0.5 text-[10px] text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/30"
+                                                        className="w-24 bg-[#0F172A]/90 border-2 border-emerald-500/40 rounded-lg px-2 py-1 text-[11px] text-white focus:outline-none focus:border-emerald-400 focus:ring-4 focus:ring-emerald-500/10 transition-all shadow-xl shadow-emerald-500/5 font-medium text-right"
                                                     />
+                                                    {isSaving && (
+                                                        <div className="absolute left-2 top-1/2 -translate-y-1/2">
+                                                            <RefreshCw size={10} className="animate-spin text-emerald-400" />
+                                                        </div>
+                                                    )}
                                                 </div>
                                             ) : (
                                                 <div 
@@ -350,32 +355,41 @@ export function SalesTable({ data, isLoading }: SalesTableProps) {
                                         <td className="p-4 text-right font-medium text-slate-400">{group.quantity}</td>
                                         <td className="p-4 text-right font-medium text-white">{formatCurrency(group.revenue)}</td>
 
-                                        {/* Costs Breakdown (Summed) */}
                                         <td className="p-4 text-right whitespace-nowrap">
                                             {editingId === `group-${idx}` ? (
-                                                <div className="flex items-center justify-end gap-1">
+                                                <div className="flex items-center justify-end relative">
                                                     <input
                                                         autoFocus
-                                                        type="number"
-                                                        step="0.01"
+                                                        type="text"
                                                         value={editValue}
-                                                        onChange={(e) => setEditValue(e.target.value)}
+                                                        onChange={(e) => setEditValue(e.target.value.replace(/[^0-9.]/g, ''))}
+                                                        onBlur={() => handleSaveCost(group.ml_item_id || '', group.sku)}
                                                         onKeyDown={(e) => {
                                                             if (e.key === 'Enter') handleSaveCost(group.ml_item_id || '', group.sku);
                                                             if (e.key === 'Escape') setEditingId(null);
                                                         }}
-                                                        className="w-16 bg-slate-800 border border-emerald-500/50 rounded px-1 py-0.5 text-[10px] text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/30"
+                                                        className="w-24 bg-[#0F172A]/90 border-2 border-emerald-500/40 rounded-lg px-2 py-1 text-[11px] text-white focus:outline-none focus:border-emerald-400 focus:ring-4 focus:ring-emerald-500/10 transition-all shadow-xl shadow-emerald-500/5 font-medium text-right"
                                                     />
+                                                    {isSaving && (
+                                                        <div className="absolute left-2 top-1/2 -translate-y-1/2">
+                                                            <RefreshCw size={10} className="animate-spin text-emerald-400" />
+                                                        </div>
+                                                    )}
                                                 </div>
                                             ) : (
                                                 <div 
-                                                    className="cursor-pointer hover:bg-slate-700/50 rounded px-1 -mx-1 transition-colors"
+                                                    className="group/cost relative cursor-pointer hover:bg-emerald-500/5 rounded-md px-2 py-1 -mx-2 transition-all duration-300"
                                                     onClick={() => {
                                                         setEditingId(`group-${idx}`);
-                                                        setEditValue((group.costs.product / group.quantity).toString()); // Unit cost
+                                                        setEditValue((group.costs.product / group.quantity).toString());
                                                     }}
                                                 >
-                                                    <span className="text-slate-500" title="Clique para editar custo unitário">{formatCurrency(group.costs.product)}</span>
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        <span className="text-slate-400 group-hover/cost:text-emerald-400 transition-colors font-medium text-[11px]">{formatCurrency(group.costs.product)}</span>
+                                                        <div className="opacity-0 group-hover/cost:opacity-100 transition-opacity">
+                                                            <Zap size={10} className="text-emerald-500/50" />
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             )}
                                         </td>
