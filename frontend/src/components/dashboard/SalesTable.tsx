@@ -43,9 +43,10 @@ interface SalesItem {
 interface SalesTableProps {
     data: SalesItem[];
     isLoading?: boolean;
+    onRefresh?: () => void;
 }
 
-export function SalesTable({ data, isLoading }: SalesTableProps) {
+export function SalesTable({ data, isLoading, onRefresh }: SalesTableProps) {
     const [viewMode, setViewMode] = useState<'list' | 'grouped'>('list');
     const [searchTerm, setSearchTerm] = useState('');
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -57,10 +58,7 @@ export function SalesTable({ data, isLoading }: SalesTableProps) {
         setIsSaving(true);
         try {
             await api.patch(`/ads/${mlItemId}/cost`, { cost: parseFloat(editValue) });
-            // For real-time feel, we should ideally trigger a dashboard refresh
-            // DashboardPage has refetchMetrics, but we are in a child component.
-            // For now, reload the page or rely on the user to refresh.
-            window.location.reload(); 
+            if (onRefresh) onRefresh();
         } catch (error) {
             console.error("Erro ao salvar custo:", error);
             alert("Erro ao salvar custo. Tente novamente.");

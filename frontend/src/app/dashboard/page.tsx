@@ -547,7 +547,11 @@ export default function DashboardPage() {
 
                 {/* Sales Detail Table */}
                 <div className="mt-16 transition-all duration-[1500ms] animate-in fade-in slide-in-from-bottom-8 delay-[1500ms] fill-mode-both">
-                    <SalesTable data={dashboardData?.sales_list || []} isLoading={isLoading} />
+                    <SalesTable 
+                        data={dashboardData?.sales_list || []} 
+                        isLoading={isLoading} 
+                        onRefresh={refetchMetrics}
+                    />
                 </div>
 
             </div>
