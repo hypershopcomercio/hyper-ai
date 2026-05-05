@@ -1,6 +1,9 @@
 
 from flask import jsonify, request
+import logging
 from app.api import api_bp
+
+logger = logging.getLogger(__name__)
 from app.services.sync_engine import SyncEngine
 from app.core.database import SessionLocal
 from app.models.system_log import SystemLog
