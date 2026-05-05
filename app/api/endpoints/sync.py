@@ -158,8 +158,11 @@ def get_sync_status():
              now_ts = datetime.utcnow()
              expires_ts = token.expires_at
              
+             print(f"DEBUG SYNC: now_ts={now_ts}, expires_ts={expires_ts}")
+             
              # If no expiry is set, we assume it's an old token that needs refresh or is valid
              if not expires_ts:
+                 print("DEBUG SYNC: No expires_at, assuming connected")
                  ml_connected = True
                  seller_id = token.seller_id or token.user_id
              else:
@@ -168,11 +171,13 @@ def get_sync_status():
                      expires_ts = expires_ts.replace(tzinfo=None)
                  
                  # Give a 5 min buffer
-                 if expires_ts > (now_ts + timedelta(minutes=5)):
+                 is_valid = expires_ts > (now_ts + timedelta(minutes=5))
+                 print(f"DEBUG SYNC: is_valid={is_valid} (Comparison: {expires_ts} > {now_ts + timedelta(minutes=5)})")
+                 
+                 if is_valid:
                      ml_connected = True
                      seller_id = token.seller_id or token.user_id
                  else:
-                     # Token expired or about to expire. 
                      ml_connected = False 
 
         # Last Sync info
@@ -194,7 +199,7 @@ def get_sync_status():
                 if log.status == 'running':
                     # Handle TZ aware vs naive
                     log_ts = log.timestamp
-                    now_now = datetime.now()
+                    now_now = datetime.utcnow()
                     if log_ts and log_ts.tzinfo:
                         log_ts = log_ts.replace(tzinfo=None)
                     if now_now.tzinfo:
