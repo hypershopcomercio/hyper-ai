@@ -9,3 +9,4 @@ tenacity
 flask
 flask-cors
 cryptography
+PyJWT

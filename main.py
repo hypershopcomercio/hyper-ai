@@ -7,9 +7,9 @@ def main():
     setup_logging()
     logging.info("Initializing Hyper Sync...")
     
-    # Create tables
-    logging.info("Creating database tables...")
-    Base.metadata.create_all(bind=engine)
+    # Create tables - Removido por regra de negócio (execução manual de SQL)
+    # logging.info("Creating database tables...")
+    # Base.metadata.create_all(bind=engine)
     
     # Start Scheduler
     logging.info("Starting Scheduler...")

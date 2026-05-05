@@ -221,8 +221,13 @@ def login():
         return response
         
     except Exception as e:
-        logger.error(f"Login error: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        error_msg = str(e)
+        if "OperationalError" in error_msg or "Access denied" in error_msg:
+            logger.critical(f"DATABASE CONNECTION ERROR: {error_msg}")
+            return jsonify({"success": False, "error": "Erro de conexão com o banco de dados. Verifique as credenciais."}), 503
+        
+        logger.error(f"Login error: {error_msg}")
+        return jsonify({"success": False, "error": error_msg}), 500
     finally:
         db.close()
 
