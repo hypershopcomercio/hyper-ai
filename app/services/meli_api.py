@@ -39,11 +39,12 @@ class MeliApiService:
             # Check expiration (giving 5 min safety buffer)
             # Check expiration (giving 5 min safety buffer)
             if token_record.expires_at:
-                now = datetime.datetime.now()
-                if token_record.expires_at.tzinfo:
-                    now = datetime.datetime.now(token_record.expires_at.tzinfo)
+                now = datetime.datetime.utcnow()
+                expires_at = token_record.expires_at
+                if expires_at.tzinfo:
+                    expires_at = expires_at.replace(tzinfo=None)
                 
-                if token_record.expires_at <= now + datetime.timedelta(minutes=5):
+                if expires_at <= now + datetime.timedelta(minutes=5):
                     logger.info("Token expired. Refreshing...")
                     return self._refresh_token(db, token_record)
             
@@ -73,7 +74,7 @@ class MeliApiService:
             token_record.refresh_token = new_tokens["refresh_token"]
             
             expires_in = new_tokens.get("expires_in", 21600) # Default 6h
-            token_record.expires_at = datetime.datetime.now() + datetime.timedelta(seconds=expires_in)
+            token_record.expires_at = datetime.datetime.utcnow() + datetime.timedelta(seconds=expires_in)
             
             db.commit()
             

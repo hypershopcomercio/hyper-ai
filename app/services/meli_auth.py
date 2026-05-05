@@ -58,7 +58,8 @@ class MeliAuthService:
             user_id = str(token_data.get("user_id"))
             
             expires_in = token_data.get("expires_in", 21600)
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+            # Use naive UTC for DB storage
+            expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
             
             # Prepare data
             data = {
@@ -120,14 +121,14 @@ class MeliAuthService:
             if not token.expires_at:
                 return token.access_token
             
-            # Ensure both are offset-aware
-            now = datetime.now(timezone.utc)
+            # Ensure both are naive UTC
+            now = datetime.utcnow()
             expiry = token.expires_at
-            if expiry.tzinfo is None:
-                expiry = expiry.replace(tzinfo=timezone.utc)
+            if expiry and expiry.tzinfo:
+                expiry = expiry.replace(tzinfo=None)
                 
             # If expired or expiring in less than 30 mins
-            if expiry <= now + timedelta(minutes=30):
+            if not expiry or expiry <= now + timedelta(minutes=30):
                 logger.info("Token expired or expiring soon. Refreshing...")
                 try:
                    refresh_data = self.refresh_access_token(token.refresh_token)
