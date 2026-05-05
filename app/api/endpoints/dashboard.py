@@ -31,6 +31,7 @@ def get_dashboard_metrics():
     try:
         # Filter Logic
         days_param = request.args.get('days', '7')
+        logger.info(f"[DEBUG_DASHBOARD] Starting metrics fetch for days={days_param}")
         
         # Timezone: Brasilia (UTC-3)
         tz_br = timezone(timedelta(hours=-3))
@@ -132,6 +133,7 @@ def get_dashboard_metrics():
         prev_start_date_utc = to_utc_naive(prev_start_date_br)
         prev_end_date_utc = to_utc_naive(prev_end_date_br)
 
+        logger.info(f"[DEBUG_DASHBOARD] UTC Boundaries: {start_date_utc} to {end_date_utc}")
         # 1. Total Ads
         total_ads = db.query(Ad).filter(Ad.status == 'active').count()
 
@@ -411,8 +413,10 @@ def get_dashboard_metrics():
         
         top_risks = sorted(stock_risks_list, key=lambda x: x['days_stock'])[:5]
 
+        logger.info("[DEBUG_DASHBOARD] Calculating cash flow...")
         # 7. Cash Flow (Chart)
         cash_flow_data = get_cash_flow_data(db, start_date_br.date(), end_date_br.date(), tz_br)
+        logger.info("[DEBUG_DASHBOARD] Cash flow calculated.")
         
         # 8. Conversion Badges (with trend and top converters)
         badges = get_conversion_distribution(
@@ -863,6 +867,7 @@ def get_dashboard_metrics():
 
 
 def get_cash_flow_data(db, start_date, end_date, tz_obj):
+    logger.info(f"[DEBUG_DASHBOARD] get_cash_flow_data called: {start_date} to {end_date}")
     # Determine granularity
     is_hourly = (end_date - start_date).days <= 1
     
