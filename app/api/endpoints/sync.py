@@ -161,6 +161,8 @@ def get_sync_status():
                  # Normalize to naive for comparison
                  if expires_ts.tzinfo:
                      expires_ts = expires_ts.replace(tzinfo=None)
+                 if now_ts.tzinfo:
+                     now_ts = now_ts.replace(tzinfo=None)
                  
                  if expires_ts > now_ts:
                      ml_connected = True
@@ -187,11 +189,15 @@ def get_sync_status():
                      last_log_ml = log
 
                 if log.status == 'running':
-                    # Check staleness
-                    timeout = 3600 if mod == 'listings' else 1800 # 1h for listings, 30m for others
                     # Handle TZ aware vs naive
-                    log_ts = log.timestamp.replace(tzinfo=None) if log.timestamp else datetime.min
-                    if (datetime.now() - log_ts).total_seconds() < timeout:
+                    log_ts = log.timestamp
+                    now_now = datetime.now()
+                    if log_ts and log_ts.tzinfo:
+                        log_ts = log_ts.replace(tzinfo=None)
+                    if now_now.tzinfo:
+                        now_now = now_now.replace(tzinfo=None)
+                        
+                    if (now_now - (log_ts or datetime.min)).total_seconds() < timeout:
                         is_syncing_ml = True
         
         # Fallback if loop didn't set last_log_ml (e.g. only running logs exist or no logs)
@@ -245,8 +251,14 @@ def get_sync_status():
         last_log_tiny = db.query(SystemLog).filter(SystemLog.module == 'stock').order_by(desc(SystemLog.timestamp)).first()
         is_syncing_tiny = False
         if last_log_tiny and last_log_tiny.status == 'running':
-             log_ts = last_log_tiny.timestamp.replace(tzinfo=None) if last_log_tiny.timestamp else datetime.min
-             if (datetime.now() - log_ts).total_seconds() < 600: # 10 mins for stock
+             log_ts = last_log_tiny.timestamp
+             now_now = datetime.now()
+             if log_ts and log_ts.tzinfo:
+                 log_ts = log_ts.replace(tzinfo=None)
+             if now_now.tzinfo:
+                 now_now = now_now.replace(tzinfo=None)
+                 
+             if (now_now - (log_ts or datetime.min)).total_seconds() < 600: # 10 mins for stock
                  is_syncing_tiny = True
         
         return jsonify({

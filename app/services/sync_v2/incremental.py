@@ -55,10 +55,11 @@ class IncrementalSyncService:
         # Start with the last stored checkpoint
         last_sync = control.last_incremental_sync
         
-        # If we have a forced lookback (e.g. 48h), we want to ensure we cover AT LEAST that window.
-        # But if the system stopped 5 days ago, last_sync will be older.
-        # So we take the MINIMUM (Oldest) date between last_sync and (now - lookback).
+        # Ensure last_sync is aware for comparison with 'now'
+        if last_sync and last_sync.tzinfo is None:
+            last_sync = last_sync.replace(tzinfo=timezone.utc)
         
+        # If we have a forced lookback (e.g. 48h), we want to ensure we cover AT LEAST that window.
         if lookback_hours:
             force_start = now - timedelta(hours=lookback_hours)
             if not last_sync or force_start < last_sync:
@@ -117,6 +118,8 @@ class IncrementalSyncService:
                     
                 for order_data in orders:
                     try:
+                        # Rate limit protection: small delay
+                        time.sleep(0.1)
                         # Full detail fetch
                         detail_resp = self.ml_api.request('GET', f"/orders/{order_data['id']}")
                         if detail_resp.status_code == 200:

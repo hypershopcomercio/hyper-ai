@@ -137,7 +137,11 @@ class SyncEngine:
         try:
             duration = None
             if start_time:
-                duration = int((datetime.datetime.now() - start_time).total_seconds() * 1000)
+                # Ensure both are naive for comparison
+                now_now = datetime.datetime.now()
+                if start_time.tzinfo:
+                    start_time = start_time.replace(tzinfo=None)
+                duration = int((now_now - start_time).total_seconds() * 1000)
                 
             level = "ERROR" if status == "error" else "INFO"
             
