@@ -1,7 +1,10 @@
 
 from flask import request, jsonify
+import logging
 from sqlalchemy import func, desc, asc
 from datetime import datetime, date, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.orm import joinedload
 
 from app.api import api_bp
