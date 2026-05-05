@@ -11,6 +11,10 @@ from app.services.ad_quality_service import AdQualityService
 from app.services.margin_calculator import MarginCalculatorService
 from app.models.system_config import SystemConfig
 import logging
+from app.models.cost_history import ProductCostLog
+from app.models.tiny_product import TinyProduct
+
+# ... existing code ...
 
 def _calculate_health_safely(ad):
     try:
@@ -854,5 +858,66 @@ def remove_ad_promotion(ad_id):
     except Exception as e:
         logger.error(f"Error removing promotion from {ad_id}: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        db.close()
+
+@api_bp.route('/ads/<ad_id>/cost', methods=['PATCH'])
+def update_ad_cost(ad_id):
+    db = SessionLocal()
+    try:
+        data = request.json
+        if 'cost' not in data:
+            return jsonify({"error": "Missing cost"}), 400
+            
+        new_cost = float(data['cost'])
+        ad = db.query(Ad).filter(Ad.id == ad_id).first()
+        if not ad:
+            return jsonify({"error": "Ad not found"}), 404
+            
+        old_cost = ad.cost
+        ad.cost = new_cost
+        
+        # Log History
+        log = ProductCostLog(
+            sku=ad.sku,
+            ml_item_id=ad.id,
+            old_cost=old_cost,
+            new_cost=new_cost,
+            source='manual_dashboard',
+            changed_by='user'
+        )
+        db.add(log)
+        
+        # Update TinyProduct if SKU exists
+        if ad.sku:
+            tiny_prod = db.query(TinyProduct).filter(TinyProduct.sku == ad.sku).first()
+            if tiny_prod:
+                tiny_prod.cost = new_cost
+        
+        # Recalculate Margin for the Ad
+        tax_config = db.query(SystemConfig).filter(SystemConfig.key == "aliquota_simples").first()
+        tax_rate = float(tax_config.value) if tax_config and tax_config.value else 12.5
+        
+        fixed_pkg_config = db.query(SystemConfig).filter(SystemConfig.key == "fixed_packaging_cost").first()
+        fixed_cost = float(fixed_pkg_config.value) if fixed_pkg_config and fixed_pkg_config.value else 0.0
+        
+        inbound_cost = 0.0
+        if ad.is_full:
+             sc_inbound = db.query(SystemConfig).filter(SystemConfig.key == 'avg_inbound_cost').first()
+             inbound_cost = float(sc_inbound.value) if sc_inbound else 0.0
+             
+        calc_service = MarginCalculatorService()
+        calc_service.calculate_margin(ad, tiny_product=None, tax_rate=tax_rate, fixed_cost=fixed_cost, inbound_cost=inbound_cost)
+        
+        db.commit()
+        return jsonify({
+            "success": True, 
+            "new_cost": new_cost,
+            "margin_percent": ad.margin_percent,
+            "margin_value": ad.margin_value
+        })
+    except Exception as e:
+        db.rollback()
+        return jsonify({"error": str(e)}), 500
     finally:
         db.close()
