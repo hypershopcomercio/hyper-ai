@@ -8,7 +8,7 @@ from app.services.sync_engine import SyncEngine
 from app.core.database import SessionLocal
 from app.models.system_log import SystemLog
 from sqlalchemy import desc
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 @api_bp.route('/sync/listings', methods=['POST'])
 def sync_listings():
