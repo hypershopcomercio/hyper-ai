@@ -310,8 +310,8 @@ def get_dashboard_metrics():
         sales_prev_sum = float(prev_gross) - float(prev_cancelled)
         
         revenue_trend = 0.0
-        if sales_prev_sum > 0:
-            revenue_trend = ((sales_current_sum - sales_prev_sum) / sales_prev_sum) * 100
+        if float(sales_prev_sum) > 0:
+            revenue_trend = ((float(sales_current_sum) - float(sales_prev_sum)) / float(sales_prev_sum)) * 100
 
         # 4. Conversion Rate
         conversion_rate = 0.0
@@ -794,7 +794,7 @@ def get_dashboard_metrics():
         # Organic Calculation (Net - Ads)
         
         # Organic Calculation (Net - Ads)
-        revenue_organic = max(0.0, round(sales_current_sum - revenue_ads, 2))
+        revenue_organic = max(0.0, round(float(sales_current_sum) - float(revenue_ads), 2))
 
         # Simplified Return (Stable)
         return jsonify({
@@ -1107,8 +1107,8 @@ def get_conversion_distribution(db, start_date_local, start_dt_utc, end_date_loc
     prev_conversion = (prev_sales_q / prev_visits_q * 100) if prev_visits_q > 0 else 0
     
     # Calculate trend
-    if prev_conversion > 0:
-        conversion_trend = ((current_conversion - prev_conversion) / prev_conversion) * 100
+    if float(prev_conversion) > 0:
+        conversion_trend = ((float(current_conversion) - float(prev_conversion)) / float(prev_conversion)) * 100
     else:
         conversion_trend = 0 if current_conversion == 0 else 100
     
