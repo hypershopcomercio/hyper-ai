@@ -11,7 +11,19 @@ from app.models.ml_order import MlOrder, MlOrderItem
 from app.models.ml_metrics_daily import MlMetricsDaily
 from app.models.forecast_learning import ForecastLog
 from app.services.meli_api import MeliApiService
+from app.services.sync_engine import SyncEngine # Added for metrics_service logic
 from app.core.constants import STOCK_RISK_WARNING_DAYS
+
+def get_orders_in_period(db, start_date, end_date):
+    """Helper to fetch orders in a specific period."""
+    from app.models.ml_order import MlOrder
+    from sqlalchemy.orm import joinedload
+    query = db.query(MlOrder).options(joinedload(MlOrder.items))
+    if start_date:
+        query = query.filter(MlOrder.date_created >= start_date)
+    if end_date:
+        query = query.filter(MlOrder.date_created < end_date)
+    return query.all()
 
 @api_bp.route('/dashboard/metrics', methods=['GET'])
 def get_dashboard_metrics():
@@ -686,7 +698,7 @@ def get_dashboard_metrics():
         # Calculate Profit Trend
         profit_trend = 0.0
         try:
-             # Fetch previous orders
+             # Fetch previous orders using helper
              prev_orders = get_orders_in_period(db, prev_start_date_utc, prev_end_date_utc)
              
              prev_profit = 0.0
@@ -839,6 +851,9 @@ def get_dashboard_metrics():
         })
         
     except Exception as e:
+         engine = SyncEngine()
+         res = engine.sync_metrics(target_date=target_date) # SyncEngine handles this
+         return jsonify(res)
         import traceback
         traceback.print_exc()
         return jsonify({
