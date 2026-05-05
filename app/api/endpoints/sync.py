@@ -158,11 +158,12 @@ def get_sync_status():
              now_ts = datetime.utcnow()
              expires_ts = token.expires_at
              
-             print(f"DEBUG SYNC: now_ts={now_ts}, expires_ts={expires_ts}")
+             logger.info(f"[DEBUG_SYNC] Token found for provider: {token.provider}")
+             logger.info(f"[DEBUG_SYNC] now_ts (UTC): {now_ts}, expires_ts (DB): {expires_ts}")
              
              # If no expiry is set, we assume it's an old token that needs refresh or is valid
              if not expires_ts:
-                 print("DEBUG SYNC: No expires_at, assuming connected")
+                 logger.info("[DEBUG_SYNC] No expires_at, assuming connected")
                  ml_connected = True
                  seller_id = token.seller_id or token.user_id
              else:
@@ -172,7 +173,7 @@ def get_sync_status():
                  
                  # Give a 5 min buffer
                  is_valid = expires_ts > (now_ts + timedelta(minutes=5))
-                 print(f"DEBUG SYNC: is_valid={is_valid} (Comparison: {expires_ts} > {now_ts + timedelta(minutes=5)})")
+                 logger.info(f"[DEBUG_SYNC] comparison: {expires_ts} > {now_ts + timedelta(minutes=5)} | is_valid: {is_valid}")
                  
                  if is_valid:
                      ml_connected = True
