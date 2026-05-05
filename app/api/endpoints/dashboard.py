@@ -282,7 +282,7 @@ def get_dashboard_metrics():
                 sales_count_current += 1
                 valid_orders_for_pareto.append(o)
 
-        sales_current_sum = curr_gross - curr_cancelled # Net Sales
+        sales_current_sum = float(curr_gross) - float(curr_cancelled) # Net Sales
 
         # Previous Revenue (Use date_closed logic too)
         q_prev_orders = db.query(MlOrder).filter(MlOrder.date_closed >= prev_start_date_utc)
@@ -307,28 +307,7 @@ def get_dashboard_metrics():
                  if o.status == 'cancelled':
                      prev_cancelled += val
                      
-        sales_prev_sum = prev_gross - prev_cancelled
-        if prev_end_date_utc:
-            q_prev_orders = q_prev_orders.filter(MlOrder.date_created < prev_end_date_utc)
-        prev_orders = q_prev_orders.all()
-        
-        prev_gross = 0.0
-        prev_cancelled = 0.0
-        for o in prev_orders:
-             # Same filter logic for consistency
-            is_ignored = False
-            if o.status == 'cancelled' and o.tags:
-                if "not_delivered" in o.tags:
-                    is_ignored = True
-            if is_ignored: continue
-            
-            val = float(o.total_amount or 0)
-            if o.status == 'paid':
-                prev_gross += val
-            elif o.status == 'cancelled':
-                prev_cancelled += val
-
-        sales_prev_sum = prev_gross - prev_cancelled
+        sales_prev_sum = float(prev_gross) - float(prev_cancelled)
         
         revenue_trend = 0.0
         if sales_prev_sum > 0:
@@ -644,8 +623,8 @@ def get_dashboard_metrics():
             
             order_cost = sum_prod_cost + sum_tax_cost + sum_fee_cost + sum_shipping_cost + sum_ads_cost
 
-            margin_val = order_rev - order_cost
-            margin_percent = (margin_val / order_rev * 100) if order_rev > 0 else 0
+            margin_val = float(order_rev) - float(order_cost)
+            margin_percent = (float(margin_val) / float(order_rev) * 100) if float(order_rev) > 0 else 0
             
             # Only add to totals if NOT cancelled
             if not is_cancelled:
@@ -800,10 +779,10 @@ def get_dashboard_metrics():
                          
                          o_cost += p_cost + t_cost + f_cost + s_cost + a_cost
                          
-                     prev_profit += (o_rev - o_cost)
+                     prev_profit += (float(o_rev) - float(o_cost))
 
              if prev_profit > 0:
-                 profit_diff = calculated_profit - prev_profit
+                 profit_diff = float(calculated_profit) - float(prev_profit)
                  profit_trend = (profit_diff / prev_profit) * 100
              elif calculated_profit > 0:
                  profit_trend = 100.0 # From 0 to something
@@ -998,7 +977,7 @@ def get_cash_flow_data(db, start_date, end_date, tz_obj):
             
             chart_data[key]["receita"] += order_revenue
             chart_data[key]["custo"] += order_cost
-            chart_data[key]["lucro"] = chart_data[key]["receita"] - chart_data[key]["custo"]
+            chart_data[key]["lucro"] = float(chart_data[key]["receita"]) - float(chart_data[key]["custo"])
 
     # --- Fetch Previous Period Orders (Comparison) ---
     # Calculate previous period
