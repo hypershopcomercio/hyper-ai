@@ -152,13 +152,19 @@ def get_auth_status():
             })
             
         is_expired = False
-        if token.expires_at and token.expires_at < datetime.now():
-            is_expired = True
-
+        now_ts = datetime.utcnow()
+        expires_ts = token.expires_at
+        
+        if expires_ts:
+            if expires_ts.tzinfo:
+                expires_ts = expires_ts.replace(tzinfo=None)
+            if expires_ts < now_ts:
+                is_expired = True
+        
         return jsonify({
-            "connected": True,
-            "seller_id": token.seller_id,
-            "expires_at": token.expires_at.isoformat() if token.expires_at else None,
+            "connected": not is_expired,
+            "seller_id": token.seller_id or token.user_id,
+            "expires_at": expires_ts.isoformat() if expires_ts else None,
             "is_expired": is_expired
         })
     finally:
