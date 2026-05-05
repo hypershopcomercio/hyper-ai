@@ -154,23 +154,30 @@ def get_sync_status():
              # We can't easily check actual validity without request, but check expiry field
              
              # Safely handle timezone for expiration check
+             # Check validity
              now_ts = datetime.now()
              expires_ts = token.expires_at
              
-             if expires_ts:
-                 # Normalize to naive for comparison
+             # If no expiry is set, we assume it's an old token that needs refresh or is valid
+             if not expires_ts:
+                 ml_connected = True
+                 seller_id = token.seller_id or token.user_id
+             else:
+                 # Normalize for comparison
                  if expires_ts.tzinfo:
                      expires_ts = expires_ts.replace(tzinfo=None)
                  if now_ts.tzinfo:
                      now_ts = now_ts.replace(tzinfo=None)
                  
-                 if expires_ts > now_ts:
+                 # Give a 5 min buffer
+                 if expires_ts > (now_ts + timedelta(minutes=5)):
                      ml_connected = True
-                     seller_id = token.seller_id
-             else:
-                 # If no expiry recorded, assume connected (legacy) or unknown
-                 ml_connected = True
-                 seller_id = token.seller_id
+                     seller_id = token.seller_id or token.user_id
+                 else:
+                     # Token expired or about to expire. 
+                     # In some cases, we might still show 'connected' if we can refresh it.
+                     # But for UI status, 'Disconnected' is safer if refresh is needed.
+                     ml_connected = False 
 
         # Last Sync info
         # ML Sync Status
