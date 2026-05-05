@@ -119,7 +119,8 @@ class IncrementalSyncService:
                 for order_data in orders:
                     try:
                         # Rate limit protection: small delay
-                        time.sleep(0.1)
+                        # Add more delay to avoid 429 during heavy sync
+                        time.sleep(1.5) 
                         # Full detail fetch
                         detail_resp = self.ml_api.request('GET', f"/orders/{order_data['id']}")
                         if detail_resp.status_code == 200:
