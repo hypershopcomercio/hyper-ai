@@ -25,6 +25,7 @@ class MeliAuthService:
         return f"{base_url}?{urllib.parse.urlencode(params, quote_via=urllib.parse.quote)}"
 
     def exchange_code_for_token(self, code: str):
+        import time
         data = {
             "grant_type": "authorization_code",
             "client_id": self.app_id,
@@ -32,20 +33,44 @@ class MeliAuthService:
             "code": code,
             "redirect_uri": self.redirect_uri,
         }
-        response = requests.post("https://api.mercadolibre.com/oauth/token", data=data)
-        response.raise_for_status()
-        return response.json()
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            response = requests.post("https://api.mercadolibre.com/oauth/token", data=data)
+            if response.status_code == 429:
+                wait = (attempt + 1) * 5
+                logger.warning(f"Rate limit during exchange. Waiting {wait}s... (Attempt {attempt+1}/{max_retries})")
+                time.sleep(wait)
+                continue
+            
+            response.raise_for_status()
+            return response.json()
+        
+        # If we get here, all retries failed
+        raise Exception("Mercado Livre está limitando as requisições (429). Por favor, aguarde 5 minutos e tente novamente.")
 
     def refresh_access_token(self, refresh_token: str):
+        import time
         data = {
             "grant_type": "refresh_token",
             "client_id": self.app_id,
             "client_secret": self.client_secret,
             "refresh_token": refresh_token,
         }
-        response = requests.post("https://api.mercadolibre.com/oauth/token", data=data)
-        response.raise_for_status()
-        return response.json()
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            response = requests.post("https://api.mercadolibre.com/oauth/token", data=data)
+            if response.status_code == 429:
+                wait = (attempt + 1) * 5
+                logger.warning(f"Rate limit during refresh. Waiting {wait}s... (Attempt {attempt+1}/{max_retries})")
+                time.sleep(wait)
+                continue
+                
+            response.raise_for_status()
+            return response.json()
+            
+        raise Exception("Mercado Livre está limitando as requisições de renovação (429).")
 
     def save_tokens(self, token_data):
         """
