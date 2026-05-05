@@ -35,6 +35,7 @@ interface SalesItem {
     status?: string;
     buyer_name?: string;
     logistic_type?: string;
+    ml_item_id?: string;
 }
 
 interface SalesTableProps {
@@ -45,6 +46,27 @@ interface SalesTableProps {
 export function SalesTable({ data, isLoading }: SalesTableProps) {
     const [viewMode, setViewMode] = useState<'list' | 'grouped'>('list');
     const [searchTerm, setSearchTerm] = useState('');
+    const [editingId, setEditingId] = useState<string | null>(null);
+    const [editValue, setEditValue] = useState<string>('');
+    const [isSaving, setIsSaving] = useState(false);
+
+    const handleSaveCost = async (mlItemId: string, sku: string) => {
+        if (!mlItemId) return;
+        setIsSaving(true);
+        try {
+            await api.patch(`/ads/${mlItemId}/cost`, { cost: parseFloat(editValue) });
+            // For real-time feel, we should ideally trigger a dashboard refresh
+            // DashboardPage has refetchMetrics, but we are in a child component.
+            // For now, reload the page or rely on the user to refresh.
+            window.location.reload(); 
+        } catch (error) {
+            console.error("Erro ao salvar custo:", error);
+            alert("Erro ao salvar custo. Tente novamente.");
+        } finally {
+            setIsSaving(false);
+            setEditingId(null);
+        }
+    };
 
     const formatCurrency = (val: number) =>
         new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
@@ -79,6 +101,7 @@ export function SalesTable({ data, isLoading }: SalesTableProps) {
                     title: item.title,
                     thumbnail: item.thumbnail,
                     sku: item.sku,
+                    ml_item_id: item.ml_item_id,
                     quantity: 0,
                     revenue: 0,
                     total_cost: 0,
@@ -235,13 +258,38 @@ export function SalesTable({ data, isLoading }: SalesTableProps) {
 
                                         {/* Costs Breakdown */}
                                         <td className="px-4 py-3 text-right whitespace-nowrap">
-                                            {item.costs.product === 0 ? (
-                                                <span className="text-rose-500 font-medium flex items-center justify-end gap-1" title="Produto sem custo cadastrado - margem estimada">
-                                                    <span className="text-rose-500/70 text-[10px]">⚠</span>
-                                                    {formatCurrency(item.costs.product)}
-                                                </span>
+                                            {editingId === `${item.order_id}-${idx}` ? (
+                                                <div className="flex items-center justify-end gap-1">
+                                                    <input
+                                                        autoFocus
+                                                        type="number"
+                                                        step="0.01"
+                                                        value={editValue}
+                                                        onChange={(e) => setEditValue(e.target.value)}
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Enter') handleSaveCost(item.ml_item_id || '', item.sku);
+                                                            if (e.key === 'Escape') setEditingId(null);
+                                                        }}
+                                                        className="w-16 bg-slate-800 border border-emerald-500/50 rounded px-1 py-0.5 text-[10px] text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/30"
+                                                    />
+                                                </div>
                                             ) : (
-                                                <span className="text-slate-500">{formatCurrency(item.costs.product)}</span>
+                                                <div 
+                                                    className="cursor-pointer hover:bg-slate-700/50 rounded px-1 -mx-1 transition-colors"
+                                                    onClick={() => {
+                                                        setEditingId(`${item.order_id}-${idx}`);
+                                                        setEditValue(item.costs.product.toString());
+                                                    }}
+                                                >
+                                                    {item.costs.product === 0 ? (
+                                                        <span className="text-rose-500 font-bold flex items-center justify-end gap-1" title="Clique para editar custo">
+                                                            <span className="text-rose-500 animate-pulse text-[10px]">⚠</span>
+                                                            {formatCurrency(item.costs.product)}
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-slate-500 group-hover:text-slate-300 transition-colors" title="Clique para editar custo">{formatCurrency(item.costs.product)}</span>
+                                                    )}
+                                                </div>
                                             )}
                                         </td>
                                         <td className="px-4 py-3 text-right text-slate-500 whitespace-nowrap">{formatCurrency(item.costs.fee)}</td>
@@ -301,7 +349,34 @@ export function SalesTable({ data, isLoading }: SalesTableProps) {
                                         <td className="p-4 text-right font-medium text-white">{formatCurrency(group.revenue)}</td>
 
                                         {/* Costs Breakdown (Summed) */}
-                                        <td className="p-4 text-right text-slate-500">{formatCurrency(group.costs.product)}</td>
+                                        <td className="p-4 text-right whitespace-nowrap">
+                                            {editingId === `group-${idx}` ? (
+                                                <div className="flex items-center justify-end gap-1">
+                                                    <input
+                                                        autoFocus
+                                                        type="number"
+                                                        step="0.01"
+                                                        value={editValue}
+                                                        onChange={(e) => setEditValue(e.target.value)}
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Enter') handleSaveCost(group.ml_item_id || '', group.sku);
+                                                            if (e.key === 'Escape') setEditingId(null);
+                                                        }}
+                                                        className="w-16 bg-slate-800 border border-emerald-500/50 rounded px-1 py-0.5 text-[10px] text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/30"
+                                                    />
+                                                </div>
+                                            ) : (
+                                                <div 
+                                                    className="cursor-pointer hover:bg-slate-700/50 rounded px-1 -mx-1 transition-colors"
+                                                    onClick={() => {
+                                                        setEditingId(`group-${idx}`);
+                                                        setEditValue((group.costs.product / group.quantity).toString()); // Unit cost
+                                                    }}
+                                                >
+                                                    <span className="text-slate-500" title="Clique para editar custo unitário">{formatCurrency(group.costs.product)}</span>
+                                                </div>
+                                            )}
+                                        </td>
                                         <td className="p-4 text-right text-slate-500">{formatCurrency(group.costs.fee)}</td>
                                         <td className="p-4 text-right text-slate-500">{formatCurrency(group.costs.tax)}</td>
                                         <td className="p-4 text-right text-slate-500">{formatCurrency(group.costs.shipping)}</td>

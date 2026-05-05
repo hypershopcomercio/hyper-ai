@@ -659,6 +659,7 @@ def get_dashboard_metrics():
                 "thumbnail": first_item_thumb,
                 "title": first_item_title, # Frontend expects title
                 "sku": first_item_sku, # Frontend expects sku
+                "ml_item_id": o.items[0].ml_item_id if o.items else None,
                 "quantity": total_order_qty, # Added quantity
                 "status": o.status,
                 "net_margin": margin_val,
@@ -674,6 +675,7 @@ def get_dashboard_metrics():
                 "items": [{
                     "title": i.title,
                     "sku": i.sku.strip() if i.sku else None,
+                    "ml_item_id": i.ml_item_id,
                     "quantity": i.quantity,
                     "price": float(i.unit_price or 0),
                     "thumbnail": ads_cache.get(i.ml_item_id).thumbnail if ads_cache.get(i.ml_item_id) else None
