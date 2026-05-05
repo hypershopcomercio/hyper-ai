@@ -851,9 +851,6 @@ def get_dashboard_metrics():
         })
         
     except Exception as e:
-         engine = SyncEngine()
-         res = engine.sync_metrics(target_date=target_date) # SyncEngine handles this
-         return jsonify(res)
         import traceback
         traceback.print_exc()
         return jsonify({
