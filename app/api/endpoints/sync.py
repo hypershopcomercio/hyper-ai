@@ -1,9 +1,11 @@
 
 from flask import jsonify, request
 import logging
+from datetime import date, datetime, timedelta
 from app.api import api_bp
 
 logger = logging.getLogger(__name__)
+SYNC_TIMEOUT_SECONDS = 1800 # 30 minutes
 from app.services.sync_engine import SyncEngine
 from app.core.database import SessionLocal
 from app.models.system_log import SystemLog
@@ -209,7 +211,7 @@ def get_sync_status():
                     if now_now.tzinfo:
                         now_now = now_now.replace(tzinfo=None)
                         
-                    if (now_now - (log_ts or datetime.min)).total_seconds() < timeout:
+                    if (now_now - (log_ts or datetime.min)).total_seconds() < SYNC_TIMEOUT_SECONDS:
                         is_syncing_ml = True
         
         # Fallback if loop didn't set last_log_ml (e.g. only running logs exist or no logs)
