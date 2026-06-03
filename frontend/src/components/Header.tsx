@@ -23,6 +23,8 @@ export function Header({ isCollapsed }: { isCollapsed: boolean }) {
             } catch (e) {
                 console.error("Error parsing user data:", e);
             }
+        } else if (process.env.NEXT_PUBLIC_AUTH_BYPASS === 'true') {
+            setUser({ name: "Auditor Local", email: "bypass@hyper.ai", role: "admin" });
         }
     }, []);
 
