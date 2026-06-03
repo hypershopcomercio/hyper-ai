@@ -3,6 +3,7 @@
 import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { Package, RefreshCw, Filter, TrendingUp, TrendingDown, AlertCircle, ShoppingCart, Truck, CheckCircle2, Minus, Activity, Zap, Clock, Info, ChevronUp, ChevronDown, ArrowUpDown } from 'lucide-react';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { api as globalApi } from '@/lib/api';
 
 interface ProductForecast {
     mlb_id: string;
@@ -43,12 +44,12 @@ interface Summary {
 
 const api = {
     get: async (url: string) => {
-        const res = await fetch(`http://localhost:5000/api${url}`);
-        return res.json();
+        const res = await globalApi.get(url);
+        return res.data;
     },
     post: async (url: string) => {
-        const res = await fetch(`http://localhost:5000/api${url}`, { method: 'POST' });
-        return res.json();
+        const res = await globalApi.post(url);
+        return res.data;
     }
 };
 

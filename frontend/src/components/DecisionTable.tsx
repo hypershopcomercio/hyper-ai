@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import PurchaseModal from './PurchaseModal';
 import { Tooltip } from './ui/Tooltip';
+import { api } from '@/lib/api';
 
 interface DecisionTableProps {
     ads: Ad[];
@@ -33,7 +34,7 @@ export function DecisionTable({ ads, loading, onSort, filterType, sort, sortOrde
 
     const loadPendingPurchases = async () => {
         try {
-            const res = await axios.get('http://localhost:5000/api/purchases/pending');
+            const res = await api.get('/purchases/pending');
             setPendingPurchases(res.data.pending || {});
         } catch (e) {
             console.error(e);
@@ -59,7 +60,7 @@ export function DecisionTable({ ads, loading, onSort, filterType, sort, sortOrde
     const handleMarkArrived = async (purchaseId: number) => {
         if (!confirm('Confirma que a compra chegou no galpão?')) return;
         try {
-            await axios.put(`http://localhost:5000/api/purchases/${purchaseId}/status`, { status: 'arrived' });
+            await api.put(`/purchases/${purchaseId}/status`, { status: 'arrived' });
             loadPendingPurchases();
             if (onRefresh) onRefresh();
         } catch (e) {

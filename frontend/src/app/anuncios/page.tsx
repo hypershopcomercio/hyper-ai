@@ -50,7 +50,7 @@ export default function AnunciosPage() {
       if (activeTab === 'baixa-margem') params.filter_type = 'low_margin';
       if (activeTab === 'sem-vendas') params.filter_type = 'no_sales';
 
-      const res = await axios.get('http://localhost:5000/api/ads', { params });
+      const res = await api.get('/ads', { params });
 
       let data = [];
       if (res.data.data && Array.isArray(res.data.data)) {
