@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { X, CheckCircle, Package } from 'lucide-react';
 import axios from 'axios';
+import { api } from '@/lib/api';
 
 // Ad type for PurchaseModal
 interface Ad {
@@ -46,7 +47,7 @@ export default function PurchaseModal({ isOpen, onClose, product, onSuccess }: P
                 expected_arrival: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] // Default 7 days
             };
 
-            const res = await axios.post('http://localhost:5000/api/purchases', payload);
+            const res = await api.post('/purchases', payload);
 
             if (onSuccess) onSuccess(res.data);
             onClose();
