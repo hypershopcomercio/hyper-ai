@@ -2255,6 +2255,7 @@ def get_product_forecasts():
         logger.error(f"Error getting product forecasts: {e}")
         import traceback
         traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
     finally:
         db.close()
 
