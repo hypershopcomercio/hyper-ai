@@ -365,7 +365,7 @@ def get_dashboard_metrics():
         sales_data = db.query(MlOrderItem.ml_item_id, func.sum(MlOrderItem.quantity))\
                        .join(MlOrder).filter(MlOrder.date_created >= start_date_utc)\
                        .group_by(MlOrderItem.ml_item_id).all()
-        sales_map = {item_id: qty for item_id, qty in sales_data}
+        sales_map = {item_id: int(qty) if qty is not None else 0 for item_id, qty in sales_data}
         
         active_ads = db.query(Ad).filter(Ad.status == 'active').all()
         stock_risk_count = 0
@@ -1084,10 +1084,10 @@ def get_conversion_distribution(db, start_date_local, start_dt_utc, end_date_loc
     prev_start = start_date_local - timedelta(days=period_days)
     prev_end = start_date_local - timedelta(days=1)
     
-    prev_visits_q = db.query(func.sum(MlMetricsDaily.visits)).filter(
+    prev_visits_q = int(db.query(func.sum(MlMetricsDaily.visits)).filter(
         MlMetricsDaily.date >= prev_start,
         MlMetricsDaily.date <= prev_end
-    ).scalar() or 0
+    ).scalar() or 0)
     
     # Calculate previous sales from Orders (More reliable than MetricsDaily)
     from app.models.ml_order import MlOrder
@@ -1100,11 +1100,11 @@ def get_conversion_distribution(db, start_date_local, start_dt_utc, end_date_loc
     p_start_dt = datetime.combine(prev_start, datetime.min.time(), tzinfo=tz_br).astimezone(timezone.utc).replace(tzinfo=None)
     p_end_dt = datetime.combine(prev_end, datetime.max.time(), tzinfo=tz_br).astimezone(timezone.utc).replace(tzinfo=None)
     
-    prev_sales_q = db.query(func.count(MlOrder.id)).filter(
+    prev_sales_q = int(db.query(func.count(MlOrder.id)).filter(
         MlOrder.date_closed >= p_start_dt,
         MlOrder.date_closed <= p_end_dt,
         MlOrder.status.in_(['paid', 'shipped', 'delivered', 'partially_paid'])
-    ).scalar() or 0
+    ).scalar() or 0)
     
     prev_conversion = (prev_sales_q / prev_visits_q * 100) if prev_visits_q > 0 else 0
     
@@ -1135,15 +1135,17 @@ def get_conversion_distribution(db, start_date_local, start_dt_utc, end_date_loc
     top_converters = []
     for row in top_ads_query:
         ad = db.query(Ad).filter(Ad.id == row.item_id).first()
-        if ad and row.total_visits > 0:
-            conv_rate = (row.total_sales / row.total_visits) * 100
+        if ad and row.total_visits and row.total_visits > 0:
+            t_sales = float(row.total_sales or 0)
+            t_visits = float(row.total_visits or 0)
+            conv_rate = (t_sales / t_visits) * 100
             top_converters.append({
                 "id": ad.id,
                 "title": ad.title[:40] + "..." if len(ad.title) > 40 else ad.title,
                 "thumbnail": ad.thumbnail,
-                "visits": row.total_visits,
-                "sales": row.total_sales,
-                "conversion_rate": round(conv_rate, 2)
+                "visits": int(t_visits),
+                "sales": int(t_sales),
+                "conversion_rate": float(round(conv_rate, 2))
             })
     
     # Distribution by conversion quality - query ALL ads with visits
@@ -1165,8 +1167,10 @@ def get_conversion_distribution(db, start_date_local, start_dt_utc, end_date_loc
     ruim = 0  # < 1%
     
     for ad in all_ads_query:
-        if ad.total_visits > 0:
-            rate = (ad.total_sales / ad.total_visits) * 100
+        if ad.total_visits and ad.total_visits > 0:
+            t_sales = float(ad.total_sales or 0)
+            t_visits = float(ad.total_visits or 0)
+            rate = (t_sales / t_visits) * 100
             if rate > 3:
                 bons += 1
             elif rate >= 1:
@@ -1175,10 +1179,10 @@ def get_conversion_distribution(db, start_date_local, start_dt_utc, end_date_loc
                 ruim += 1
     
     return {
-        "trend": round(conversion_trend, 2),
-        "is_positive": conversion_trend >= 0,
-        "current_rate": round(current_conversion, 2),
-        "prev_rate": round(prev_conversion, 2),
+        "trend": float(round(conversion_trend, 2)),
+        "is_positive": float(conversion_trend) >= 0,
+        "current_rate": float(round(current_conversion, 2)),
+        "prev_rate": float(round(prev_conversion, 2)),
         "top_converters": top_converters,
         "distribution": [
             {"val": bons, "label": "BONS", "color": "text-emerald-400"},
