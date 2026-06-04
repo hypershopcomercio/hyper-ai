@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        print(f"DEBUG: Loaded DATABASE_URL: {self.DATABASE_URL}")
+        # Print de debug de conexão removido por segurança
         if not self.DATABASE_URL:
              # Default to local sqlite if nothing is provided
              self.DATABASE_URL = "sqlite:///hyper_sync.db"
