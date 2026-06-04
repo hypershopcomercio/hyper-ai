@@ -4,8 +4,7 @@ from dotenv import load_dotenv
 # Force reload environment variables from .env file, overriding any stale shell envs
 load_dotenv(override=True)
 
-print(f"DEBUG PRE-IMPORT: DATABASE_URL={os.getenv('DATABASE_URL')}")
-
+# (Print de segurança removido para não vazar a connection string nos logs)
 from app.web import app
 
 if __name__ == "__main__":
@@ -132,4 +131,5 @@ if __name__ == "__main__":
         processor.start()
         print("WEBHOOK_PROCESSOR: Started")
 
-    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=True)
+    flask_debug = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+    app.run(host="0.0.0.0", port=5000, debug=flask_debug, use_reloader=flask_debug)

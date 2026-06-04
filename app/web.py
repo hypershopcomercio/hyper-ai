@@ -1,7 +1,9 @@
 import logging
 import datetime
+import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from werkzeug.exceptions import HTTPException
 from app.core.config import settings
 from app.services.meli_auth import MeliAuthService
 from app.core.database import SessionLocal
@@ -13,6 +15,21 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)  # Habilita CORS para todas as origens
+
+# Setup de Error Handler Global para evitar HTML traceback em produção
+@app.errorhandler(Exception)
+def handle_exception(e):
+    if isinstance(e, HTTPException):
+        return jsonify({
+            "error": e.name,
+            "message": e.description
+        }), e.code
+
+    logger.error("Unhandled Exception", exc_info=True)
+    return jsonify({
+        "error": "Internal Server Error",
+        "message": "Ocorreu um erro interno. Verifique os logs do servidor."
+    }), 500
 
 from app.api import api_bp
 app.register_blueprint(api_bp)
@@ -148,4 +165,5 @@ def meli_callback():
 if __name__ == "__main__":
     # Execução para teste local
     print(f"Servidor rodando. Configure o Redirect URI no ML para: {settings.MELI_REDIRECT_URI if settings.MELI_REDIRECT_URI else 'http://localhost:5000/oauth/meli/callback'}")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    flask_debug = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+    app.run(host="0.0.0.0", port=5000, debug=flask_debug)

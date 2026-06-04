@@ -447,6 +447,16 @@ class MeliApiService:
         Returns:
             dict with 'success': bool, 'old_price': float|None, 'new_price': float, 'error': str|None
         """
+        import os
+        write_enabled = os.getenv('ML_PRICE_WRITE_ENABLED', 'false').lower() == 'true'
+        if not write_enabled:
+            return {
+                "success": False,
+                "status": "locked",
+                "error": "PRICE_WRITE_LOCKED",
+                "message": "Escrita de preço no Mercado Livre bloqueada por segurança."
+            }
+
         result = {
             "success": False,
             "old_price": None,

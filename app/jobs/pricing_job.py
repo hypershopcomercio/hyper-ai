@@ -80,6 +80,21 @@ def _execute_single_strategy(db: Session, meli_api: MeliApiService, ad: Ad) -> d
     """
     Executes a single pricing strategy for one ad.
     """
+    import os
+    write_enabled = os.getenv('ML_PRICE_WRITE_ENABLED', 'false').lower() == 'true'
+    if not write_enabled:
+        logger.warning(f"Fase 0 Lock: Tentativa de alteração de preço do anúncio {ad.id} bloqueada (Orquestração).")
+        return {
+            "ad_id": ad.id,
+            "title": ad.title[:50] if ad.title else "",
+            "success": False,
+            "status": "locked",
+            "old_price": float(ad.price or 0),
+            "new_price": None,
+            "error": "PRICE_WRITE_LOCKED",
+            "message": "Escrita de preço no Mercado Livre bloqueada por segurança."
+        }
+
     result = {
         "ad_id": ad.id,
         "title": ad.title[:50] if ad.title else "",
@@ -201,6 +216,16 @@ def execute_single_ad_step(ad_id: str, target_price: float = None) -> dict:
         ad_id: The MLB item ID
         target_price: Optional specific price to set. If None, uses next calculated step.
     """
+    import os
+    write_enabled = os.getenv('ML_PRICE_WRITE_ENABLED', 'false').lower() == 'true'
+    if not write_enabled:
+        return {
+            "success": False,
+            "status": "locked",
+            "error": "PRICE_WRITE_LOCKED",
+            "message": "Escrita de preço no Mercado Livre bloqueada por segurança."
+        }
+
     db = SessionLocal()
     meli_api = MeliApiService(db)
     
