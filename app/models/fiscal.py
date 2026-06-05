@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Date, Text, Enum
+from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Date, Text, Enum, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.database import Base
@@ -27,7 +27,7 @@ class ProductTaxProfile(Base):
     __tablename__ = "product_tax_profiles"
 
     id = Column(Integer, primary_key=True, index=True)
-    mlb_id = Column(String(255), nullable=False, index=True)
+    mlb_id = Column(String(255), nullable=False, unique=True, index=True)
     sku = Column(String(100), nullable=True, index=True)
     tiny_product_id = Column(Integer, nullable=True)
     
@@ -82,3 +82,7 @@ class ProductPurchaseCost(Base):
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index('idx_cost_lookup', 'mlb_id', 'is_active', 'effective_from'),
+    )
