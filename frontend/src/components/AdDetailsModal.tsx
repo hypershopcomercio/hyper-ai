@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { CompetitorManager } from "./hyper-ai/CompetitorManager";
 import { AdPerformanceCharts } from "./hyper-ai/AdPerformanceCharts";
@@ -52,6 +52,10 @@ export function AdDetailsModal({ adId, onClose }: Props) {
     const [targetMargin, setTargetMargin] = useState<number>(0);
     const [simulatedPrice, setSimulatedPrice] = useState<number>(0);
     const [showStrategy, setShowStrategy] = useState(false); // Added missing state
+    
+    // Fiscal Breakdown State
+    const [fiscalResult, setFiscalResult] = useState<any>(null);
+    const [isSimulatingFiscal, setIsSimulatingFiscal] = useState(false);
 
 
     // Price Execution Modal State
@@ -138,6 +142,73 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                     const currentMarginDec = currentMargin / 100;
                     const targetMarginDec = initialMargin / 100;
                     // Derived costs from current price/margin
+                    const cmValue = (currentMarginDec * effectivePrice);
+                    const derivedCost = effectivePrice - cmValue;
+                    
+                    const newSimPrice = derivedCost / (1 - targetMarginDec);
+                    setSimulatedPrice(newSimPrice > 0 ? newSimPrice : effectivePrice);
+                }
+            }
+        }
+    }, [activeTab, ad, targetMargin]);
+
+    // Fiscal Simulation Effect (Fase 2.3)
+    useEffect(() => {
+        if (activeTab === 'margin' && ad) {
+            if (!ad.cost || ad.cost <= 0) {
+                setFiscalResult(null);
+                return;
+            }
+
+            const runSimulation = async () => {
+                setIsSimulatingFiscal(true);
+                try {
+                    const priceToSimulate = simulatedPrice > 0 ? simulatedPrice : ad.price;
+                    const payload = {
+                        ad_id: ad.id,
+                        simulate_price: priceToSimulate,
+                        target_margin_percent: targetMargin,
+                        product_cost: {
+                            real_cost: ad.cost || 0,
+                            valor_nf: ad.cost ? ad.cost * 0.5 : 0,
+                            ipi_rate: 0.0,
+                            difal_value: 0.0,
+                            other_purchase_costs: 0.0,
+                            product_origin: "nacional"
+                        },
+                        tax_profile: {
+                            full_das_rate: 10.0,
+                            das_without_icms_rate: 4.83,
+                            has_st: false,
+                            has_ipi: false,
+                            has_difal: false,
+                            mva_rate: 0.0,
+                            origin_icms_rate: 12.0,
+                            destination_icms_rate: 18.0
+                        },
+                        marketplace: {
+                            fee_rate: ad.commission_percent || 10.0,
+                            fixed_fee: priceToSimulate < 79.90 ? 6.0 : 0.0,
+                            freight_cost: ad.shipping_cost || 0.0,
+                            other_variable_costs: 0.0
+                        }
+                    };
+                    const res = await api.post('/pricing/simulate', payload);
+                    setFiscalResult(res.data);
+                } catch (err: any) {
+                    console.error("Erro na simulação fiscal:", err);
+                    if (err.response?.status === 401) {
+                        toast.error("Simulação falhou (401). Token ausente na requisição.", { id: "auth_err" });
+                    }
+                    setFiscalResult(null);
+                } finally {
+                    setIsSimulatingFiscal(false);
+                }
+            };
+            const timer = setTimeout(runSimulation, 500);
+            return () => clearTimeout(timer);
+        }
+    }, [simulatedPrice, targetMargin, activeTab, ad]);
                     const currentCosts = effectivePrice * (1 - currentMarginDec);
 
                     if (targetMarginDec < 0.95) {
@@ -2060,6 +2131,156 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                             </div>
                                                         </div>
                                                     </div>
+
+                                                    {/* INÍCIO DA FASE 2.3: Análise Fiscal do Preço */}
+                                                    <div className="mt-6">
+                                                        <div className="bg-[#0c0d12] border border-white/10 rounded-xl overflow-hidden relative shadow-2xl">
+                                                            {/* Selo Visual de Simulação */}
+                                                            <div className="bg-indigo-500/10 border-b border-indigo-500/20 p-4 relative overflow-hidden">
+                                                                <div className="flex items-center justify-between">
+                                                                    <div className="flex items-center gap-3">
+                                                                        <div className="p-2 bg-indigo-500/20 rounded-lg">
+                                                                            <Calculator size={20} className="text-indigo-400" />
+                                                                        </div>
+                                                                        <div>
+                                                                            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                                                                                Análise Fiscal do Preço
+                                                                                <span className="px-2 py-0.5 bg-indigo-500/20 text-indigo-300 text-[10px] uppercase rounded border border-indigo-500/30 font-bold">
+                                                                                    Modo Simulação — Dados Fiscais Estimados
+                                                                                </span>
+                                                                            </h3>
+                                                                            <p className="text-[10px] text-slate-400 mt-1">
+                                                                                Os impostos exibidos usam parâmetros temporários até a configuração fiscal do produto ser cadastrada.
+                                                                            </p>
+                                                                        </div>
+                                                                    </div>
+                                                                    {fiscalResult && (
+                                                                        <div>
+                                                                            {fiscalResult.status === 'approved' && <span className="px-3 py-1 bg-emerald-500/20 text-emerald-400 text-xs font-bold uppercase rounded-full border border-emerald-500/30 flex items-center gap-1"><CheckCircle2 size={14}/> Aprovado</span>}
+                                                                            {fiscalResult.status === 'warning' && <span className="px-3 py-1 bg-amber-500/20 text-amber-400 text-xs font-bold uppercase rounded-full border border-amber-500/30 flex items-center gap-1"><AlertTriangle size={14}/> Alerta</span>}
+                                                                            {fiscalResult.status === 'blocked' && <span className="px-3 py-1 bg-rose-500/20 text-rose-400 text-xs font-bold uppercase rounded-full border border-rose-500/30 flex items-center gap-1"><ShieldCheck size={14}/> Bloqueado</span>}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                                {isSimulatingFiscal && (
+                                                                    <div className="absolute bottom-0 left-0 h-0.5 bg-indigo-500/50 animate-[pulse_1s_infinite] w-full"></div>
+                                                                )}
+                                                            </div>
+                                                            
+                                                            {/* Tratamento de Custo Ausente */}
+                                                            {(!ad.cost || ad.cost <= 0) ? (
+                                                                <div className="p-8 text-center bg-rose-500/5">
+                                                                    <AlertTriangle size={32} className="text-rose-500/50 mx-auto mb-3" />
+                                                                    <p className="text-rose-400 font-bold text-sm">Custo não cadastrado — simulação fiscal indisponível</p>
+                                                                    <p className="text-rose-400/70 text-xs mt-1">Preencha o custo de reposição para liberar a análise.</p>
+                                                                </div>
+                                                            ) : !fiscalResult ? (
+                                                                <div className="p-8 text-center text-slate-500">
+                                                                    <RefreshCw size={24} className="mx-auto mb-2 animate-spin opacity-50" />
+                                                                    <p className="text-xs">Calculando carga tributária...</p>
+                                                                </div>
+                                                            ) : (
+                                                                <div className="p-5">
+                                                                    {/* Avisos de Bloqueio */}
+                                                                    {fiscalResult.status === 'blocked' && (
+                                                                        <div className="mb-5 p-3 bg-rose-500/10 border border-rose-500/20 rounded-lg">
+                                                                            <p className="text-xs font-bold text-rose-400 mb-1">Motivo do Bloqueio: {fiscalResult.block_reason}</p>
+                                                                            <ul className="list-disc pl-4 text-[11px] text-rose-300">
+                                                                                {fiscalResult.hard_locks?.map((lk: string) => <li key={lk}>{lk}</li>)}
+                                                                                {fiscalResult.warnings?.map((w: string) => <li key={w} className="text-amber-300">{w}</li>)}
+                                                                            </ul>
+                                                                        </div>
+                                                                    )}
+
+                                                                    <div className="grid grid-cols-2 gap-6">
+                                                                        {/* Lado Esquerdo: Mercado Livre (Reais) */}
+                                                                        <div>
+                                                                            <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-white/5 pb-2 mb-3">Dados Reais do Anúncio/ML</h4>
+                                                                            <div className="space-y-2">
+                                                                                <div className="flex justify-between text-xs">
+                                                                                    <span className="text-slate-400">Preço Atual</span>
+                                                                                    <span className="text-white">{(ad.price || 0).toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</span>
+                                                                                </div>
+                                                                                <div className="flex justify-between text-xs">
+                                                                                    <span className="text-slate-400">Custo Base</span>
+                                                                                    <span className="text-white">{(ad.cost || 0).toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</span>
+                                                                                </div>
+                                                                                <div className="flex justify-between text-xs">
+                                                                                    <span className="text-slate-400">Comissão ML</span>
+                                                                                    <span className="text-white">{fiscalResult.costs?.marketplace_fee_value?.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'}) || "R$ 0,00"}</span>
+                                                                                </div>
+                                                                                <div className="flex justify-between text-xs">
+                                                                                    <span className="text-slate-400">Frete ML</span>
+                                                                                    <span className="text-white">{fiscalResult.costs?.freight_cost?.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'}) || "R$ 0,00"}</span>
+                                                                                </div>
+                                                                                <div className="flex justify-between text-xs border-t border-white/5 pt-2 mt-2">
+                                                                                    <span className="text-indigo-400 font-bold">Preço Simulado</span>
+                                                                                    <span className="text-indigo-400 font-bold font-mono">{(fiscalResult.simulated_price || 0).toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</span>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+
+                                                                        {/* Lado Direito: Estimativas Fiscais */}
+                                                                        <div>
+                                                                            <h4 className="text-[10px] font-bold text-amber-500/70 uppercase tracking-wider border-b border-white/5 pb-2 mb-3">Dados Fiscais Mockados</h4>
+                                                                            <div className="space-y-2">
+                                                                                <div className="flex justify-between text-xs">
+                                                                                    <span className="text-slate-400">Valor NF (Simulado)</span>
+                                                                                    <span className="text-amber-100">{((ad.cost || 0) * 0.5).toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</span>
+                                                                                </div>
+                                                                                <div className="flex justify-between text-xs">
+                                                                                    <span className="text-slate-400">DAS</span>
+                                                                                    <span className="text-amber-100">{fiscalResult.costs?.sales_tax_value?.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'}) || "R$ 0,00"}</span>
+                                                                                </div>
+                                                                                <div className="flex justify-between text-xs">
+                                                                                    <span className="text-slate-400">ST Estimado</span>
+                                                                                    <span className="text-amber-100">{fiscalResult.costs?.st_value?.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'}) || "R$ 0,00"}</span>
+                                                                                </div>
+                                                                                <div className="flex justify-between text-xs">
+                                                                                    <span className="text-slate-400">IPI</span>
+                                                                                    <span className="text-amber-100">{fiscalResult.costs?.ipi_value?.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'}) || "R$ 0,00"}</span>
+                                                                                </div>
+                                                                                <div className="flex justify-between text-xs border-t border-white/5 pt-2 mt-2">
+                                                                                    <span className="text-slate-400">Custo Final Estimado</span>
+                                                                                    <span className="text-white font-mono">{(fiscalResult.costs?.final_product_cost || 0).toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</span>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+
+                                                                    {/* Resultado (Lucro) */}
+                                                                    <div className="mt-5 p-4 bg-gradient-to-r from-slate-900 to-[#13141b] rounded-lg border border-white/5 flex items-center justify-between">
+                                                                        <div>
+                                                                            <p className="text-[10px] text-slate-500 uppercase">Lucro Líquido Real</p>
+                                                                            <p className={`text-xl font-bold font-mono ${fiscalResult.profit_amount >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                                                {(fiscalResult.profit_amount || 0).toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}
+                                                                            </p>
+                                                                        </div>
+                                                                        <div className="text-right">
+                                                                            <p className="text-[10px] text-slate-500 uppercase">Margem Real</p>
+                                                                            <p className={`text-xl font-bold font-mono ${fiscalResult.contribution_margin_percent >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                                                {(fiscalResult.contribution_margin_percent || 0).toFixed(2)}%
+                                                                            </p>
+                                                                        </div>
+                                                                    </div>
+
+                                                                    {/* Limites de Preço Seguros */}
+                                                                    <div className="mt-4 grid grid-cols-2 gap-4">
+                                                                        <div className="bg-white/5 p-3 rounded border border-white/5 flex items-center justify-between">
+                                                                            <span className="text-[10px] text-slate-400">Preço Mínimo (Lucro R$ 0)</span>
+                                                                            <span className="text-xs font-mono text-white">{(fiscalResult.minimum_price_zero_profit || 0).toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</span>
+                                                                        </div>
+                                                                        <div className="bg-white/5 p-3 rounded border border-white/5 flex items-center justify-between">
+                                                                            <span className="text-[10px] text-slate-400">Piso (Margem {targetMargin}%)</span>
+                                                                            <span className="text-xs font-mono text-indigo-300">{(fiscalResult.minimum_price_target_margin || 0).toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</span>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    {/* FIM DA FASE 2.3 */}
+
                                                 </div>
                                             )}
 
