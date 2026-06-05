@@ -209,20 +209,7 @@ export function AdDetailsModal({ adId, onClose }: Props) {
             return () => clearTimeout(timer);
         }
     }, [simulatedPrice, targetMargin, activeTab, ad]);
-                    const currentCosts = effectivePrice * (1 - currentMarginDec);
 
-                    if (targetMarginDec < 0.95) {
-                        const calculatedPrice = currentCosts / (1 - targetMarginDec);
-                        // Sanity check: new price should be reasonable (0.5x to 3x current)
-                        const clampedPrice = Math.max(effectivePrice * 0.5, Math.min(calculatedPrice, effectivePrice * 3));
-                        setSimulatedPrice(clampedPrice);
-                    } else {
-                        setSimulatedPrice(effectivePrice); // Fallback for extreme margins
-                    }
-                }
-            }
-        }
-    }, [activeTab]);
 
     const handleProtectClick = () => {
         setIsProtectionModalOpen(true);

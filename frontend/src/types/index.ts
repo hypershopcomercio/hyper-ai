@@ -87,6 +87,7 @@ export interface Ad {
     // Flat fields from list view
     tax_cost?: number;
     commission_cost?: number;
+    commission_percent?: number;
     shipping_cost?: number;
     ads_spend_30d?: number;
     stock_incoming?: number;
