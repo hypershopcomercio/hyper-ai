@@ -27,7 +27,7 @@ class ProductTaxProfile(Base):
     __tablename__ = "product_tax_profiles"
 
     id = Column(Integer, primary_key=True, index=True)
-    mlb_id = Column(String(50), nullable=False, index=True)
+    mlb_id = Column(String(255), nullable=False, index=True)
     sku = Column(String(100), nullable=True, index=True)
     tiny_product_id = Column(Integer, nullable=True)
     
@@ -60,7 +60,7 @@ class ProductPurchaseCost(Base):
     __tablename__ = "product_purchase_costs"
 
     id = Column(Integer, primary_key=True, index=True)
-    mlb_id = Column(String(50), nullable=False, index=True)
+    mlb_id = Column(String(255), nullable=False, index=True)
     sku = Column(String(100), nullable=True, index=True)
     
     real_cost = Column(Float, nullable=False)
