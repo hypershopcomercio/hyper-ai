@@ -11,6 +11,7 @@ import { ConfirmModal } from "@/components/ui/ConfirmModal";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { PromoSelector } from './PromoSelector';
 import { MarginSimulator } from './MarginSimulator';
+import { FiscalParametersTab } from './FiscalParametersTab';
 
 
 
@@ -24,7 +25,7 @@ interface Props {
 export function AdDetailsModal({ adId, onClose }: Props) {
     const [ad, setAd] = useState<Ad | null>(null);
     const [loading, setLoading] = useState(true);
-    const [activeTab, setActiveTab] = useState<'overview' | 'performance' | 'health' | 'competition' | 'margin'>('overview');
+    const [activeTab, setActiveTab] = useState<'overview' | 'performance' | 'health' | 'competition' | 'margin' | 'fiscal'>('overview');
     const [activeImageIndex, setActiveImageIndex] = useState(0);
     const [isLightboxOpen, setIsLightboxOpen] = useState(false);
     const [confirmAction, setConfirmAction] = useState<{
@@ -758,12 +759,20 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                             >
                                                 <Search size={14} /> Concorrência
                                             </button>
-                                            <button
+                                            <div
                                                 onClick={() => setActiveTab('margin')}
                                                 className={`px-4 py-2 rounded-lg text-xs font-bold uppercase transition-colors flex items-center gap-2 cursor-pointer ${activeTab === 'margin' ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'}`}
                                             >
-                                                <DollarSign size={14} /> Precificação
-                                            </button>
+                                                <Calculator className="w-4 h-4" />
+                                                Precificação
+                                            </div>
+                                            <div
+                                                onClick={() => setActiveTab('fiscal')}
+                                                className={`px-4 py-2 rounded-lg text-xs font-bold uppercase transition-colors flex items-center gap-2 cursor-pointer ${activeTab === 'fiscal' ? 'bg-indigo-500/20 text-indigo-400' : 'text-slate-500 hover:text-indigo-400'}`}
+                                            >
+                                                <Building2 className="w-4 h-4" />
+                                                Ficha Fiscal
+                                            </div>
                                         </div>
 
                                         <div className="flex-1 p-6 overflow-y-auto custom-scrollbar">
@@ -1319,6 +1328,10 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                     <CompetitorManager adId={adId} />
                                                 </div>
                                             )}
+                                            {activeTab === 'fiscal' && (
+                                                <FiscalParametersTab adId={ad.id} />
+                                            )}
+
                                             {activeTab === 'margin' && (
                                                 <div className="-m-6">
                                                     {/* Strategy Progress Panel - Always visible */}
