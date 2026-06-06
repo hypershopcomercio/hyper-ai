@@ -12,6 +12,7 @@ import { Tooltip } from "@/components/ui/Tooltip";
 import { PromoSelector } from './PromoSelector';
 import { MarginSimulator } from './MarginSimulator';
 import { FiscalParametersTab } from './FiscalParametersTab';
+import { AdMediaTab } from './AdMediaTab';
 
 
 
@@ -25,7 +26,7 @@ interface Props {
 export function AdDetailsModal({ adId, onClose }: Props) {
     const [ad, setAd] = useState<Ad | null>(null);
     const [loading, setLoading] = useState(true);
-    const [activeTab, setActiveTab] = useState<'overview' | 'performance' | 'health' | 'competition' | 'margin' | 'fiscal'>('overview');
+    const [activeTab, setActiveTab] = useState<'overview' | 'performance' | 'health' | 'competition' | 'margin' | 'fiscal' | 'media'>('overview');
     const [activeImageIndex, setActiveImageIndex] = useState(0);
     const [isLightboxOpen, setIsLightboxOpen] = useState(false);
     const [confirmAction, setConfirmAction] = useState<{
@@ -419,7 +420,7 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                     onClick={onClose}
                 />
 
-                <div className="relative w-full max-w-7xl max-h-[95vh] h-[90vh] bg-[#0c0d12] rounded-[24px] border border-white/10 shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-300">
+                <div className="relative w-[92vw] max-w-[1600px] h-[90vh] max-h-none bg-[#0c0d12] rounded-[24px] border border-white/10 shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-300">
                     {/* 1. HEADER: Compact & Actionable */}
                     <div className="w-full bg-[#13141b] border-b border-white/5 px-6 py-4 flex items-center justify-between shrink-0">
                         <div className="flex items-center gap-4 min-w-0 flex-1 mr-4">
@@ -445,6 +446,7 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                     <span className="w-1 h-1 rounded-full bg-slate-700 mx-1" />
                                     <span className="text-slate-400">ID:</span>
                                     <span className="text-slate-300 font-bold select-all">{adId}</span>
+                                    {ad && <span className={`ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest border ${ad.is_full ? 'bg-[#00A650]/20 text-[#00A650] border-[#00A650]/30' : 'bg-slate-800 text-slate-400 border-slate-700'}`}>{ad.is_full ? 'FULL' : (ad.shipping_mode === 'me2' ? 'Envios' : 'Próprio')}</span>}
                                 </div>
                             </div>
                         </div>
@@ -626,114 +628,12 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                 </div>
 
                                 {/* 3. MAIN DASHBOARD GRID */}
-                                <div className="p-6 pt-0 grid grid-cols-1 lg:grid-cols-5 gap-6">
+                                <div className="p-6 pt-0 flex-1 flex flex-col min-h-0">
 
                                     {/* LEFT: Product Identity & Logistics (1 Col) */}
-                                    <div className="lg:col-span-2 space-y-0">
-                                        {/* Stock & Logistics Header Bar - matching tabs height */}
-                                        <div className="flex items-center gap-1 p-2 border-b border-white/5 bg-[#13141b] rounded-t-2xl border-x border-t border-white/5">
-                                            <div className="flex-1 px-4 py-2 rounded-lg bg-white/10 text-white text-xs font-bold uppercase flex items-center justify-center gap-2">
-                                                <Boxes size={14} /> Estoque: <span className={ad.available_quantity > 0 ? 'text-emerald-400' : 'text-rose-400'}>{ad.available_quantity}</span>
-                                            </div>
-                                            <div className={`flex-1 px-4 py-2 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 ${ad.is_full ? 'bg-[#00A650]/10 text-[#00A650]' : 'text-slate-400 hover:text-slate-300'}`}>
-                                                <Truck size={14} /> {ad.is_full ? 'FULL' : (ad.shipping_mode === 'me2' ? 'Envios' : 'Próprio')}
-                                            </div>
-                                        </div>
-                                        {/* Image & Info */}
-                                        <div className="bg-[#13141b] rounded-b-2xl p-6 border-x border-b border-white/5 flex flex-col items-center">
-                                            <div className="w-full aspect-square bg-white rounded-xl mb-4 p-4 flex items-center justify-center relative group overflow-hidden">
-                                                <div className="absolute top-2 right-2 z-10 flex gap-2">
-                                                    <a
-                                                        href={ad.pictures?.[activeImageIndex]?.url || ad.thumbnail.replace('I.jpg', 'O.jpg')}
-                                                        target="_blank"
-                                                        rel="noreferrer"
-                                                        className="p-2 bg-white/90 rounded-full text-slate-600 hover:text-blue-600 shadow-sm transition-colors block"
-                                                        title="Abrir Original"
-                                                    >
-                                                        <ExternalLink size={16} />
-                                                    </a>
-                                                    <a
-                                                        href={ad.pictures?.[activeImageIndex]?.url || ad.thumbnail.replace('I.jpg', 'O.jpg')}
-                                                        download={`foto_${ad.id}_${activeImageIndex + 1}`}
-                                                        target="_blank"
-                                                        rel="noreferrer"
-                                                        onClick={(e) => e.stopPropagation()}
-                                                        className="p-2 bg-white/90 rounded-full text-slate-600 hover:text-emerald-600 shadow-sm transition-colors block"
-                                                        title="Baixar Foto"
-                                                    >
-                                                        <Download size={16} />
-                                                    </a >
-                                                </div>
-
-                                                {/* Navigation Arrows */}
-                                                {ad.pictures && ad.pictures.length > 1 && (
-                                                    <>
-                                                        <button
-                                                            onClick={handlePrevImage}
-                                                            className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 bg-black/20 hover:bg-black/40 text-white rounded-full transition-colors z-10 cursor-pointer"
-                                                        >
-                                                            <ChevronLeft size={20} />
-                                                        </button>
-                                                        <button
-                                                            onClick={handleNextImage}
-                                                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 bg-black/20 hover:bg-black/40 text-white rounded-full transition-colors z-10 cursor-pointer"
-                                                        >
-                                                            <ChevronRight size={20} />
-                                                        </button>
-                                                    </>
-                                                )}
-
-                                                <div
-                                                    className="absolute bottom-2 right-2 p-1.5 bg-black/10 text-slate-400 rounded-lg pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity"
-                                                >
-                                                    <Maximize2 size={14} />
-                                                </div>
-
-                                                <img
-                                                    src={ad.pictures?.[activeImageIndex]?.url || ad.thumbnail.replace('I.jpg', 'O.jpg')}
-                                                    alt={ad.title}
-                                                    onClick={() => setIsLightboxOpen(true)}
-                                                    className="max-w-full max-h-full object-contain mix-blend-multiply group-hover:scale-105 transition-transform duration-500 cursor-pointer"
-                                                />
-                                            </div>
-
-                                            {/* Thumbnails Gallery */}
-                                            {ad.pictures && ad.pictures.length > 1 && (
-                                                <div className="w-full overflow-x-auto flex gap-2 mb-4 pb-2 custom-scrollbar">
-                                                    {ad.pictures.map((pic, idx) => (
-                                                        <button
-                                                            key={pic.id}
-                                                            onClick={() => setActiveImageIndex(idx)}
-                                                            className={`flex-shrink-0 w-12 h-12 rounded-lg bg-white border-2 overflow-hidden transition-all cursor-pointer ${activeImageIndex === idx ? 'border-blue-500 ring-2 ring-blue-500/20' : 'border-transparent opacity-60 hover:opacity-100'}`}
-                                                        >
-                                                            <img src={pic.url} alt={`Foto ${idx + 1}`} className="w-full h-full object-cover mix-blend-multiply" />
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            )}
-
-
-                                        </div>
-
-                                        {/* Intelligent Actions (Generic) */}
-                                        {(!ad.cost || ad.cost === 0) && (
-                                            <div className="bg-gradient-to-br from-blue-600/10 to-blue-500/5 rounded-2xl p-5 border border-blue-500/20">
-                                                <div className="flex items-start gap-3">
-                                                    <div className="mt-1"><AlertTriangle size={18} className="text-blue-400" /></div>
-                                                    <div className="flex-1">
-                                                        <h4 className="text-white font-bold text-sm mb-1">Custo Indefinido</h4>
-                                                        <p className="text-slate-400 text-xs mb-3">Defina o custo para desbloquear aná¡lise de margem.</p>
-                                                        <button className="w-full py-2 rounded-lg bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 text-xs font-bold uppercase transition-colors border border-blue-500/30">
-                                                            Definir Custo
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
 
                                     {/* RIGHT: Detailed Analysis Tabs (2 Cols) */}
-                                    <div className="lg:col-span-3 flex flex-col h-full bg-[#13141b] rounded-2xl border border-white/5 overflow-hidden">
+                                    <div className="flex flex-col h-full bg-[#13141b] rounded-2xl border border-white/5 overflow-hidden">
                                         <div className="flex items-center gap-1 p-2 border-b border-white/5 overflow-x-auto">
                                             <button
                                                 onClick={() => setActiveTab('overview')}
@@ -1328,6 +1228,10 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                     <CompetitorManager adId={adId} />
                                                 </div>
                                             )}
+                                                                                        {activeTab === 'media' && (
+                                                <AdMediaTab ad={ad} setIsLightboxOpen={setIsLightboxOpen} />
+                                            )}
+
                                             {activeTab === 'fiscal' && (
                                                 <FiscalParametersTab adId={ad.id} />
                                             )}

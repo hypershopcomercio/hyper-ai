@@ -166,10 +166,10 @@ export function FiscalParametersTab({ adId, onSaved }: Props) {
                 <button
                     onClick={handleSave}
                     disabled={saving}
-                    className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
+                    className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-md transition-colors flex items-center gap-2 disabled:opacity-50 shadow-sm"
                 >
                     {saving ? <PremiumLoader /> : <Save className="w-4 h-4" />}
-                    Salvar Ficha Fiscal
+                    Salvar
                 </button>
             </div>
 
@@ -325,29 +325,29 @@ export function FiscalParametersTab({ adId, onSaved }: Props) {
 
                     <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs text-slate-400 mb-1">Custo Real (Pago) R$</label>
+                            <label className="block text-[11px] font-medium text-slate-400 mb-1">Custo Real R$</label>
                             <input
                                 type="number"
                                 value={realCost}
                                 onChange={e => setRealCost(e.target.value === "" ? "" : Number(e.target.value))}
-                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white font-medium text-emerald-400"
+                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-md px-3 py-1.5 text-sm text-white font-semibold text-emerald-400 focus:border-indigo-500 outline-none"
                                 step="0.01"
                             />
                         </div>
                         <div>
-                            <label className="block text-xs text-slate-400 mb-1">Valor na Nota Fiscal R$</label>
+                            <label className="block text-[11px] font-medium text-slate-400 mb-1">Valor na NF R$</label>
                             <input
                                 type="number"
                                 value={nfValue}
                                 onChange={e => setNfValue(e.target.value === "" ? "" : Number(e.target.value))}
-                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white"
+                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-md px-3 py-1.5 text-sm text-white focus:border-indigo-500 outline-none"
                                 step="0.01"
                             />
                             {nfPercentage && (
-                                <p className="text-[10px] text-slate-500 mt-1 flex items-center gap-1">
-                                    <Info className="w-3 h-3" />
-                                    Subfaturamento/NF: <strong className="text-slate-300">{nfPercentage}% do custo real</strong>
-                                </p>
+                                <div className="mt-1.5 inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20">
+                                    <Info className="w-3 h-3 text-indigo-400" />
+                                    <span className="text-[10px] text-indigo-300 font-medium">NF: {nfPercentage}% do custo</span>
+                                </div>
                             )}
                         </div>
                     </div>
@@ -417,6 +417,42 @@ export function FiscalParametersTab({ adId, onSaved }: Props) {
                             className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 outline-none"
                             placeholder="Anotações sobre a configuração fiscal"
                         />
+                    </div>
+                </div>
+            </div>
+
+            {/* RESUMO FISCAL */}
+            <div className="bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 mt-6">
+                <div className="flex items-center gap-2 mb-4">
+                    <Calculator className="w-4 h-4 text-indigo-400" />
+                    <h4 className="font-semibold text-slate-200">Resumo da Configuração</h4>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div className="bg-[#0B1120] p-3 rounded-lg border border-[#1E293B]">
+                        <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Custo Total de Compra</div>
+                        <div className="text-lg font-semibold text-white">
+                            R$ {((Number(realCost) || 0) + (Number(freightCost) || 0) + (Number(packagingCost) || 0) + (Number(otherCosts) || 0)).toFixed(2)}
+                        </div>
+                    </div>
+                    <div className="bg-[#0B1120] p-3 rounded-lg border border-[#1E293B]">
+                        <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">NCM / CEST</div>
+                        <div className="text-sm font-medium text-slate-300 mt-1">
+                            {ncm || '---'} / {cest || '---'}
+                        </div>
+                    </div>
+                    <div className="bg-[#0B1120] p-3 rounded-lg border border-[#1E293B]">
+                        <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Complexidade Tributária</div>
+                        <div className="flex gap-2 mt-1.5">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${hasSt ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-500'}`}>ST</span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${hasIpi ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-500'}`}>IPI</span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${hasDifal ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-500'}`}>DIFAL</span>
+                        </div>
+                    </div>
+                    <div className="bg-[#0B1120] p-3 rounded-lg border border-[#1E293B]">
+                        <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Origem</div>
+                        <div className="text-sm font-medium text-slate-300 mt-1 capitalize">
+                            {productOrigin}
+                        </div>
                     </div>
                 </div>
             </div>
