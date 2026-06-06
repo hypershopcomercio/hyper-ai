@@ -628,12 +628,12 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                 </div>
 
                                 {/* 3. MAIN DASHBOARD GRID */}
-                                <div className="p-6 pt-0 flex-1 flex flex-col min-h-0">
+                                <div className="p-6 pt-0 flex flex-col">
 
                                     {/* LEFT: Product Identity & Logistics (1 Col) */}
 
                                     {/* RIGHT: Detailed Analysis Tabs (2 Cols) */}
-                                    <div className="flex flex-col h-full bg-[#13141b] rounded-2xl border border-white/5 overflow-hidden">
+                                    <div className="flex flex-col bg-[#13141b] rounded-2xl border border-white/5">
                                         <div className="flex items-center gap-1 p-2 border-b border-white/5 overflow-x-auto">
                                             <button
                                                 onClick={() => setActiveTab('overview')}
@@ -675,7 +675,7 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                             </div>
                                         </div>
 
-                                        <div className="flex-1 p-6 overflow-y-auto custom-scrollbar">
+                                        <div className="p-6">
                                             {activeTab === 'overview' && (
                                                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
 

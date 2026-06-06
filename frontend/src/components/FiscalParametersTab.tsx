@@ -142,14 +142,7 @@ export function FiscalParametersTab({ adId, onSaved }: Props) {
         ? ((nfValue / realCost) * 100).toFixed(1)
         : null;
 
-    if (loading) {
-        return (
-            <div className="flex flex-col items-center justify-center p-12">
-                <PremiumLoader />
-                <p className="text-slate-400 mt-4 text-sm animate-pulse">Sincronizando base fiscal...</p>
-            </div>
-        );
-    }
+
 
     return (
         <div className="space-y-6">
@@ -158,6 +151,7 @@ export function FiscalParametersTab({ adId, onSaved }: Props) {
                     <h3 className="text-lg font-bold text-white flex items-center gap-2">
                         <Calculator className="w-5 h-5 text-indigo-400" />
                         Parâmetros Fiscais (V1)
+                        {loading && <span className="ml-4 text-xs font-normal text-slate-400 flex items-center gap-2"><PremiumLoader /> Carregando...</span>}
                     </h3>
                     <p className="text-sm text-slate-400 mt-1">
                         Configure as alíquotas reais de compra e NCM deste produto para precisão na DRE.
