@@ -2126,7 +2126,9 @@ export function AdDetailsModal({ adId, onClose }: Props) {
 
                                                                         {/* Lado Direito: Estimativas Fiscais */}
                                                                         <div>
-                                                                            <h4 className="text-[10px] font-bold text-amber-500/70 uppercase tracking-wider border-b border-white/5 pb-2 mb-3">Dados Fiscais Mockados</h4>
+                                                                            <h4 className={`text-[10px] font-bold uppercase tracking-wider border-b border-white/5 pb-2 mb-3 ${fiscalResult.is_mocked ? 'text-amber-500/70' : 'text-emerald-500/70'}`}>
+                                                                                {fiscalResult.is_mocked ? 'Dados Fiscais Estimados' : 'Base de Cálculo (Ficha Real)'}
+                                                                            </h4>
                                                                             <div className="space-y-2">
                                                                                 <div className="flex justify-between text-xs">
                                                                                     <span className="text-slate-400">Valor NF (Simulado)</span>
