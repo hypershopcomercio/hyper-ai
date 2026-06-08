@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { Save, AlertCircle, Calculator, Info } from "lucide-react";
+import { Save, AlertCircle, Calculator, Info, RefreshCw } from "lucide-react";
 import { PremiumLoader } from "@/components/ui/PremiumLoader";
 
 interface Props {
@@ -151,7 +151,7 @@ export function FiscalParametersTab({ adId, onSaved }: Props) {
                     <h3 className="text-lg font-bold text-white flex items-center gap-2">
                         <Calculator className="w-5 h-5 text-indigo-400" />
                         Parâmetros Fiscais (V1)
-                        {loading && <span className="ml-4 text-xs font-normal text-slate-400 flex items-center gap-2"><PremiumLoader /> Carregando...</span>}
+                        {loading && <span className="ml-4 text-[10px] font-normal text-slate-500 flex items-center gap-1.5"><RefreshCw size={12} className="animate-spin" /> Atualizando dados...</span>}
                     </h3>
                     <p className="text-sm text-slate-400 mt-1">
                         Configure as alíquotas reais de compra e NCM deste produto para precisão na DRE.
@@ -169,7 +169,7 @@ export function FiscalParametersTab({ adId, onSaved }: Props) {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* PERFIL FISCAL */}
-                <div className={`bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 space-y-4 ${loading ? 'opacity-50 pointer-events-none animate-pulse' : 'transition-opacity duration-300'}`}>
+                <div className="bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 space-y-4">
                     <div className="flex items-center gap-2 mb-2">
                         <AlertCircle className="w-4 h-4 text-emerald-400" />
                         <h4 className="font-semibold text-slate-200">Perfil de Tributação</h4>
@@ -311,7 +311,7 @@ export function FiscalParametersTab({ adId, onSaved }: Props) {
                 </div>
 
                 {/* CUSTO DE COMPRA */}
-                <div className={`bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 space-y-4 ${loading ? 'opacity-50 pointer-events-none animate-pulse' : 'transition-opacity duration-300'}`}>
+                <div className="bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 space-y-4">
                     <div className="flex items-center gap-2 mb-2">
                         <AlertCircle className="w-4 h-4 text-rose-400" />
                         <h4 className="font-semibold text-slate-200">Custo Histórico de Compra</h4>
@@ -416,7 +416,7 @@ export function FiscalParametersTab({ adId, onSaved }: Props) {
             </div>
 
             {/* RESUMO FISCAL */}
-            <div className={`bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 mt-6 ${loading ? 'opacity-50 pointer-events-none animate-pulse' : 'transition-opacity duration-300'}`}>
+            <div className="bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 mt-6">
                 <div className="flex items-center gap-2 mb-4">
                     <Calculator className="w-4 h-4 text-indigo-400" />
                     <h4 className="font-semibold text-slate-200">Resumo da Configuração</h4>
