@@ -169,7 +169,7 @@ export function FiscalParametersTab({ adId, onSaved }: Props) {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* PERFIL FISCAL */}
-                <div className="bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 space-y-4">
+                <div className={`bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 space-y-4 ${loading ? 'opacity-50 pointer-events-none animate-pulse' : 'transition-opacity duration-300'}`}>
                     <div className="flex items-center gap-2 mb-2">
                         <AlertCircle className="w-4 h-4 text-emerald-400" />
                         <h4 className="font-semibold text-slate-200">Perfil de Tributação</h4>
@@ -311,7 +311,7 @@ export function FiscalParametersTab({ adId, onSaved }: Props) {
                 </div>
 
                 {/* CUSTO DE COMPRA */}
-                <div className="bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 space-y-4">
+                <div className={`bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 space-y-4 ${loading ? 'opacity-50 pointer-events-none animate-pulse' : 'transition-opacity duration-300'}`}>
                     <div className="flex items-center gap-2 mb-2">
                         <AlertCircle className="w-4 h-4 text-rose-400" />
                         <h4 className="font-semibold text-slate-200">Custo Histórico de Compra</h4>
@@ -416,7 +416,7 @@ export function FiscalParametersTab({ adId, onSaved }: Props) {
             </div>
 
             {/* RESUMO FISCAL */}
-            <div className="bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 mt-6">
+            <div className={`bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 mt-6 ${loading ? 'opacity-50 pointer-events-none animate-pulse' : 'transition-opacity duration-300'}`}>
                 <div className="flex items-center gap-2 mb-4">
                     <Calculator className="w-4 h-4 text-indigo-400" />
                     <h4 className="font-semibold text-slate-200">Resumo da Configuração</h4>
