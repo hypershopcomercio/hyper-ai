@@ -288,3 +288,23 @@ def simulate_pricing():
             "status": "error",
             "message": str(e)
         }), 500
+
+@api_bp.route('/pricing/resolve/<ad_id>', methods=['GET'])
+@require_auth
+def resolve_pricing_data(ad_id):
+    """Retorna os metadados de auditoria e os inputs calculados pelo PricingDataResolver."""
+    from app.core.database import SessionLocal
+    from app.services.pricing.resolver import PricingDataResolver
+    
+    db = SessionLocal()
+    try:
+        resolver = PricingDataResolver(db)
+        result = resolver.resolve(ad_id)
+        if "error" in result:
+            return jsonify(result), 404
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error(f"Error resolving pricing data for {ad_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
