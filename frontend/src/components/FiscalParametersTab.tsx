@@ -195,7 +195,7 @@ export function FiscalParametersTab({ adId, pricingResolution, isResolvingPricin
                         </div>
 
                         <div className="pt-2 border-t border-white/5 mt-2 flex justify-between items-center">
-                            <span className="text-xs text-white font-medium">Custo Base Resolvido:</span>
+                            <span className="text-xs text-white font-medium">Custo Final Resolvido:</span>
                             <span className={`text-sm font-mono font-bold ${isConflict ? 'text-amber-400' : 'text-emerald-400'}`}>
                                 {formatCurrency(cost_candidates?.resolved_final_cost || 0)}
                             </span>
@@ -222,7 +222,7 @@ export function FiscalParametersTab({ adId, pricingResolution, isResolvingPricin
                         </div>
                         
                         <div className="flex justify-between text-slate-400 pt-1">
-                            <span>(+) IPI ({audit?.ipi_rate?.value || 0}%)</span>
+                            <span>(+) IPI ({((audit?.ipi_rate?.value || 0) * (audit?.ipi_rate?.value < 1 ? 100 : 1)).toFixed(1)}%)</span>
                             <span>{formatCurrency(audit?.ipi_value?.value || 0)}</span>
                         </div>
                         <div className="flex justify-between text-slate-400">
