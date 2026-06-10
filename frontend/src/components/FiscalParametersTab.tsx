@@ -1,455 +1,298 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { Save, AlertCircle, Calculator, Info, RefreshCw } from "lucide-react";
+import { AlertCircle, Calculator, RefreshCw, ShieldAlert, CheckCircle2, Lock, Edit3, X, Save, Clock, Info, ArrowRight } from "lucide-react";
 import { PremiumLoader } from "@/components/ui/PremiumLoader";
 
 interface Props {
     adId: string;
+    pricingResolution: any;
+    isResolvingPricing: boolean;
     onSaved?: () => void;
 }
 
-export function FiscalParametersTab({ adId, onSaved }: Props) {
-    const [loading, setLoading] = useState(true);
+export function FiscalParametersTab({ adId, pricingResolution, isResolvingPricing, onSaved }: Props) {
+    const [isOverrideModalOpen, setIsOverrideModalOpen] = useState(false);
+    
+    // Override form state
+    const [overrideCost, setOverrideCost] = useState("");
+    const [overrideNfValue, setOverrideNfValue] = useState("");
+    const [overrideReason, setOverrideReason] = useState("");
     const [saving, setSaving] = useState(false);
 
-    // Tax Profile State
-    const [sku, setSku] = useState("");
-    const [productOrigin, setProductOrigin] = useState("nacional");
-    const [originUf, setOriginUf] = useState("");
-    const [destinationUfDefault, setDestinationUfDefault] = useState("");
-    const [ncm, setNcm] = useState("");
-    const [cest, setCest] = useState("");
-    const [hasSt, setHasSt] = useState(false);
-    const [hasIpi, setHasIpi] = useState(false);
-    const [hasDifal, setHasDifal] = useState(false);
-    const [mvaRate, setMvaRate] = useState<number | "">("");
-    const [ipiRate, setIpiRate] = useState<number | "">("");
-    const [originIcmsRate, setOriginIcmsRate] = useState<number | "">("");
-    const [destinationIcmsRate, setDestinationIcmsRate] = useState<number | "">("");
-    const [taxNotes, setTaxNotes] = useState("");
+    if (isResolvingPricing && !pricingResolution) {
+        return (
+            <div className="flex justify-center items-center h-40">
+                <div className="flex flex-col items-center text-slate-500 gap-3">
+                    <RefreshCw className="animate-spin" size={24} />
+                    <span className="text-xs uppercase font-bold tracking-widest">Sincronizando Auditoria Fiscal...</span>
+                </div>
+            </div>
+        );
+    }
 
-    // Purchase Cost State
-    const [realCost, setRealCost] = useState<number | "">("");
-    const [nfValue, setNfValue] = useState<number | "">("");
-    const [freightCost, setFreightCost] = useState<number | "">("");
-    const [packagingCost, setPackagingCost] = useState<number | "">("");
-    const [otherCosts, setOtherCosts] = useState<number | "">("");
-    const [supplierName, setSupplierName] = useState("");
-    const [nfNumber, setNfNumber] = useState("");
+    if (!pricingResolution) return null;
 
-    const loadData = async () => {
-        setLoading(true);
-        try {
-            const res = await api.get(`/ads/${adId}/fiscal-profile`);
-            const data = res.data?.data;
-            if (data) {
-                if (data.tax_profile) {
-                    const tp = data.tax_profile;
-                    setSku(tp.sku || "");
-                    setProductOrigin(tp.product_origin || "nacional");
-                    setOriginUf(tp.origin_uf || "");
-                    setDestinationUfDefault(tp.destination_uf_default || "");
-                    setNcm(tp.ncm || "");
-                    setCest(tp.cest || "");
-                    setHasSt(tp.has_st || false);
-                    setHasIpi(tp.has_ipi || false);
-                    setHasDifal(tp.has_difal || false);
-                    setMvaRate(tp.mva_rate ?? "");
-                    setIpiRate(tp.ipi_rate ?? "");
-                    setOriginIcmsRate(tp.origin_icms_rate ?? "");
-                    setDestinationIcmsRate(tp.destination_icms_rate ?? "");
-                    setTaxNotes(tp.notes || "");
-                }
-                if (data.purchase_cost) {
-                    const pc = data.purchase_cost;
-                    if (!data.tax_profile?.sku) setSku(pc.sku || "");
-                    setRealCost(pc.real_cost ?? "");
-                    setNfValue(pc.nf_value ?? "");
-                    setFreightCost(pc.freight_cost ?? "");
-                    setPackagingCost(pc.packaging_cost ?? "");
-                    setOtherCosts(pc.other_costs ?? "");
-                    setSupplierName(pc.supplier_name || "");
-                    setNfNumber(pc.nf_number || "");
-                }
-            }
-        } catch (err: any) {
-            if (err.response?.status === 404) {
-                toast.error("Anúncio não encontrado (404).");
-            } else if (err.response?.status === 401) {
-                toast.error("Acesso Negado (401). Faça login novamente.");
-            } else {
-                toast.error("Erro ao carregar dados fiscais.");
-            }
-        } finally {
-            setLoading(false);
+    const { status, is_usable_for_automation, audit, missing_fields, hard_locks, data_sources, confidence_summary, selected_cost_source, selection_status, cost_candidates, comparison } = pricingResolution;
+    
+    const isBlocked = !is_usable_for_automation;
+    const isConflict = hard_locks?.includes("COST_SOURCE_CONFLICT");
+
+    const handleSaveOverride = async () => {
+        if (!overrideReason || overrideReason.length < 5) {
+            toast.error("Motivo do override é obrigatório e deve ser claro.");
+            return;
         }
-    };
 
-    useEffect(() => {
-        loadData();
-    }, [adId]);
+        const isTest = overrideReason.toLowerCase().includes("teste") || overrideReason.toLowerCase().includes("correção") || overrideReason.toLowerCase().includes("temporário");
 
-    const handleSave = async () => {
         setSaving(true);
         try {
             const payload = {
-                tax_profile: {
-                    sku,
-                    product_origin: productOrigin,
-                    origin_uf: originUf,
-                    destination_uf_default: destinationUfDefault,
-                    ncm,
-                    cest,
-                    has_st: hasSt,
-                    has_ipi: hasIpi,
-                    has_difal: hasDifal,
-                    mva_rate: mvaRate === "" ? null : Number(mvaRate),
-                    ipi_rate: ipiRate === "" ? null : Number(ipiRate),
-                    origin_icms_rate: originIcmsRate === "" ? null : Number(originIcmsRate),
-                    destination_icms_rate: destinationIcmsRate === "" ? null : Number(destinationIcmsRate),
-                    notes: taxNotes,
-                    is_active: true
-                },
                 purchase_cost: {
-                    sku,
-                    real_cost: realCost === "" ? 0 : Number(realCost),
-                    nf_value: nfValue === "" ? null : Number(nfValue),
-                    freight_cost: freightCost === "" ? 0 : Number(freightCost),
-                    packaging_cost: packagingCost === "" ? 0 : Number(packagingCost),
-                    other_costs: otherCosts === "" ? 0 : Number(otherCosts),
-                    supplier_name: supplierName,
-                    nf_number: nfNumber,
+                    real_cost: overrideCost ? Number(overrideCost) : 0,
+                    nf_value: overrideNfValue ? Number(overrideNfValue) : 0,
                     data_source: "manual",
+                    notes: overrideReason,
                     is_active: true
                 }
             };
-
             await api.put(`/ads/${adId}/fiscal-profile`, payload);
-            toast.success("Perfil fiscal atualizado com sucesso!");
+            toast.success("Exceção registrada com sucesso!");
+            if (isTest) {
+                toast.warning("Como o motivo indica 'teste' ou 'correção', a automação permanecerá bloqueada por segurança.");
+            }
+            setIsOverrideModalOpen(false);
             if (onSaved) onSaved();
-            loadData();
-        } catch (err: any) {
+        } catch (err) {
             console.error(err);
-            toast.error("Erro ao salvar perfil fiscal.");
+            toast.error("Erro ao salvar exceção fiscal.");
         } finally {
             setSaving(false);
         }
     };
 
-    // Auto-calculate NF%
-    const nfPercentage = (typeof nfValue === 'number' && typeof realCost === 'number' && realCost > 0)
-        ? ((nfValue / realCost) * 100).toFixed(1)
-        : null;
+    const formatCurrency = (value: number) => {
+        return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+    };
 
+    const renderConfidenceBadge = (conf: string) => {
+        if (conf === 'high') return <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Alta Confiança</span>;
+        if (conf === 'medium') return <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-amber-500/20 text-amber-400 border border-amber-500/30">Média Confiança</span>;
+        return <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-rose-500/20 text-rose-400 border border-rose-500/30">Baixa Confiança</span>;
+    };
 
+    const renderAuditRow = (label: string, key: string) => {
+        const entry = audit?.[key];
+        if (!entry) return null;
+
+        return (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3 border-b border-white/5 hover:bg-white/[0.02] transition-colors gap-3">
+                <div className="flex flex-col gap-1">
+                    <span className="text-xs font-bold text-slate-300">{label}</span>
+                    <div className="flex items-center gap-2">
+                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border uppercase ${entry.source_type === 'override' ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30' : entry.source_type === 'automatic' ? 'bg-slate-800 text-slate-400 border-slate-700' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
+                            {entry.source_type}: {entry.source}
+                        </span>
+                        {renderConfidenceBadge(entry.confidence)}
+                    </div>
+                    {entry.formula && <span className="text-[10px] text-slate-500 font-mono mt-1 flex items-center gap-1"><Calculator size={10} /> {entry.formula}</span>}
+                    {entry.warnings && entry.warnings.map((w: string, i: number) => (
+                        <span key={i} className="text-[9px] text-amber-400 flex items-center gap-1 mt-0.5"><AlertCircle size={9}/> {w}</span>
+                    ))}
+                </div>
+                <div className="flex flex-col sm:items-end">
+                    <span className="text-sm font-mono font-bold text-white">
+                        {typeof entry.value === 'number' ? entry.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 4 }) : entry.value}
+                    </span>
+                    {entry.updated_at && (
+                        <span className="text-[9px] text-slate-500 flex items-center gap-1 mt-1">
+                            <Clock size={9} /> {new Date(entry.updated_at).toLocaleString('pt-BR')}
+                        </span>
+                    )}
+                </div>
+            </div>
+        );
+    };
 
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
                 <div>
                     <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                        <Calculator className="w-5 h-5 text-indigo-400" />
-                        Parâmetros Fiscais (V1)
-                        {loading && <span className="ml-4 text-[10px] font-normal text-slate-500 flex items-center gap-1.5"><RefreshCw size={12} className="animate-spin" /> Atualizando dados...</span>}
+                        <ShieldAlert className="w-5 h-5 text-indigo-400" />
+                        Auditoria Fiscal (Read-Only)
+                        {isResolvingPricing && <RefreshCw size={14} className="animate-spin text-slate-500 ml-2" />}
                     </h3>
                     <p className="text-sm text-slate-400 mt-1">
-                        Configure as alíquotas reais de compra e NCM deste produto para precisão na DRE.
+                        Esta tela não é um formulário de preenchimento. O sistema utiliza os dados oficiais do Tiny ERP por padrão. Use as opções de exceção apenas em casos de bloqueio ou correção necessária.
                     </p>
                 </div>
-                <button
-                    onClick={handleSave}
-                    disabled={saving}
-                    className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-md transition-colors flex items-center gap-2 disabled:opacity-50 shadow-sm"
-                >
-                    {saving ? <PremiumLoader /> : <Save className="w-4 h-4" />}
-                    Salvar
-                </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* PERFIL FISCAL */}
-                <div className="bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 space-y-4">
-                    <div className="flex items-center gap-2 mb-2">
-                        <AlertCircle className="w-4 h-4 text-emerald-400" />
-                        <h4 className="font-semibold text-slate-200">Perfil de Tributação</h4>
+            {/* STATUS ROW */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="bg-[#13141b] rounded-xl border border-white/5 p-4 flex flex-col justify-center">
+                    <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Status de Automação</span>
+                    <div className="flex items-center gap-2">
+                        {isBlocked ? <Lock size={16} className="text-rose-400" /> : <CheckCircle2 size={16} className="text-emerald-400" />}
+                        <span className={`text-sm font-bold uppercase ${isBlocked ? 'text-rose-400' : 'text-emerald-400'}`}>
+                            {status === 'needs_review' ? 'Revisão Pendente' : isBlocked ? 'Bloqueado' : 'Aprovado'}
+                        </span>
                     </div>
+                </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs text-slate-400 mb-1">SKU Pai</label>
-                            <input
-                                type="text"
-                                value={sku}
-                                onChange={e => setSku(e.target.value)}
-                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
-                                placeholder="EX: 001"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs text-slate-400 mb-1">Origem do Produto</label>
-                            <select
-                                value={productOrigin}
-                                onChange={e => setProductOrigin(e.target.value)}
-                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 outline-none"
-                            >
-                                <option value="nacional">0 - Nacional</option>
-                                <option value="importado">1,2,3 - Importado</option>
-                            </select>
-                        </div>
+                <div className="bg-[#13141b] rounded-xl border border-white/5 p-4 flex flex-col justify-center">
+                    <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Decisão de Custo Base</span>
+                    <span className={`text-sm font-bold uppercase ${selection_status === 'conflict_detected' ? 'text-rose-400' : 'text-indigo-400'}`}>
+                        {selection_status.replace('_', ' ')}
+                    </span>
+                    <span className="text-[10px] text-slate-500 mt-1 font-mono">{selected_cost_source}</span>
+                </div>
 
-                        <div>
-                            <label className="block text-xs text-slate-400 mb-1">NCM</label>
-                            <input
-                                type="text"
-                                value={ncm}
-                                onChange={e => setNcm(e.target.value)}
-                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white"
-                                placeholder="0000.00.00"
-                            />
+                <div className="bg-[#13141b] rounded-xl border border-white/5 p-4 col-span-1 md:col-span-2 flex flex-col justify-center">
+                    <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Fontes Identificadas</span>
+                    <div className="flex items-center justify-between">
+                        <div className="flex flex-col">
+                            <span className="text-xs text-slate-400">Tiny / Automático:</span>
+                            <span className="font-mono text-slate-200">{formatCurrency(cost_candidates?.tiny_ads_cost || 0)}</span>
                         </div>
-                        <div>
-                            <label className="block text-xs text-slate-400 mb-1">CEST</label>
-                            <input
-                                type="text"
-                                value={cest}
-                                onChange={e => setCest(e.target.value)}
-                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white"
-                                placeholder="00.000.00"
-                            />
+                        <ArrowRight size={14} className="text-slate-600 mx-2" />
+                        <div className="flex flex-col">
+                            <span className="text-xs text-slate-400">Override Manual:</span>
+                            <span className="font-mono text-indigo-400">{cost_candidates?.override_manual_base ? formatCurrency(cost_candidates.override_manual_base) : 'Nenhum'}</span>
                         </div>
-
-                        <div>
-                            <label className="block text-xs text-slate-400 mb-1">UF Origem (Sua)</label>
-                            <input
-                                type="text"
-                                maxLength={2}
-                                value={originUf}
-                                onChange={e => setOriginUf(e.target.value.toUpperCase())}
-                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white uppercase"
-                                placeholder="SP"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs text-slate-400 mb-1">UF Destino Padrão</label>
-                            <input
-                                type="text"
-                                maxLength={2}
-                                value={destinationUfDefault}
-                                onChange={e => setDestinationUfDefault(e.target.value.toUpperCase())}
-                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white uppercase"
-                                placeholder="SP"
-                            />
+                        <ArrowRight size={14} className="text-slate-600 mx-2" />
+                        <div className="flex flex-col">
+                            <span className="text-xs font-bold text-white">Custo Resolvido:</span>
+                            <span className={`font-mono font-bold ${isConflict ? 'text-rose-400' : 'text-emerald-400'}`}>{formatCurrency(cost_candidates?.resolved_final_cost || 0)}</span>
                         </div>
                     </div>
+                </div>
+            </div>
 
-                    <div className="pt-2 border-t border-[#1E293B]">
-                        <div className="flex gap-4 mb-4">
-                            <label className="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" checked={hasSt} onChange={e => setHasSt(e.target.checked)} className="rounded bg-slate-800 border-slate-700 text-indigo-500 focus:ring-indigo-500" />
-                                <span className="text-sm text-slate-300">Tem ST</span>
-                            </label>
-                            <label className="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" checked={hasIpi} onChange={e => setHasIpi(e.target.checked)} className="rounded bg-slate-800 border-slate-700 text-indigo-500 focus:ring-indigo-500" />
-                                <span className="text-sm text-slate-300">Tem IPI</span>
-                            </label>
-                            <label className="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" checked={hasDifal} onChange={e => setHasDifal(e.target.checked)} className="rounded bg-slate-800 border-slate-700 text-indigo-500 focus:ring-indigo-500" />
-                                <span className="text-sm text-slate-300">Difal</span>
-                            </label>
-                        </div>
+            {/* ACTIONS PANEL */}
+            <div className="bg-indigo-950/20 border border-indigo-500/20 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div>
+                    <h4 className="text-sm font-bold text-indigo-300">Gestão de Exceções</h4>
+                    <p className="text-xs text-indigo-200/70 mt-1">
+                        Use overrides manuais apenas para corrigir falhas de integração ou acordos pontuais com fornecedores.
+                    </p>
+                </div>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => {
+                            setOverrideCost(audit?.product_base_cost?.value || "");
+                            setOverrideNfValue(audit?.nf_value?.value || "");
+                            setOverrideReason("");
+                            setIsOverrideModalOpen(true);
+                        }}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold uppercase rounded-md transition-colors flex items-center gap-2 shadow-sm"
+                    >
+                        <Edit3 className="w-4 h-4" />
+                        Criar / Revisar Override Manual
+                    </button>
+                </div>
+            </div>
 
-                        <div className="grid grid-cols-2 gap-4">
-                            {hasSt && (
-                                <div>
-                                    <label className="block text-xs text-slate-400 mb-1">MVA Original (%)</label>
-                                    <input
-                                        type="number"
-                                        value={mvaRate}
-                                        onChange={e => setMvaRate(e.target.value === "" ? "" : Number(e.target.value))}
-                                        className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white"
-                                        step="0.01"
-                                    />
-                                </div>
-                            )}
-                            {hasIpi && (
-                                <div>
-                                    <label className="block text-xs text-slate-400 mb-1">IPI (%)</label>
-                                    <input
-                                        type="number"
-                                        value={ipiRate}
-                                        onChange={e => setIpiRate(e.target.value === "" ? "" : Number(e.target.value))}
-                                        className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white"
-                                        step="0.01"
-                                    />
-                                </div>
-                            )}
+            {/* AUDIT LIST */}
+            <div className="bg-[#13141b] border border-white/5 rounded-xl overflow-hidden mt-6">
+                <div className="px-4 py-3 bg-white/[0.02] border-b border-white/5 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                        <AlertCircle size={14} className="text-slate-400" />
+                        <h4 className="text-xs font-bold text-slate-300 uppercase tracking-widest">Rastreio de Variáveis Fiscais e Custos</h4>
+                    </div>
+                    {audit?.product_base_cost?.updated_at && (
+                        <span className="text-[10px] text-slate-500">Última atualização: {new Date(audit.product_base_cost.updated_at).toLocaleString()}</span>
+                    )}
+                </div>
+                <div className="flex flex-col">
+                    {renderAuditRow("Custo Base do Produto", "product_base_cost")}
+                    {renderAuditRow("Valor na Nota Fiscal (NF)", "nf_value")}
+                    {renderAuditRow("Alíquota IPI", "ipi_rate")}
+                    {renderAuditRow("Valor IPI", "ipi_value")}
+                    {renderAuditRow("Substituição Tributária (ST)", "st_value")}
+                    {renderAuditRow("Custos Extras de Compra", "purchase_extra_costs")}
+                    {renderAuditRow("Alíquota DAS (Simples)", "sales_tax_rate")}
+                    {renderAuditRow("Custo Fiscal e Reposição Total Resolvido", "final_product_cost")}
+                </div>
+            </div>
+
+            {/* OVERRIDE MODAL */}
+            {isOverrideModalOpen && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setIsOverrideModalOpen(false)}></div>
+                    <div className="bg-[#0f111a] border border-indigo-500/30 rounded-2xl p-6 w-full max-w-md relative z-10 shadow-2xl">
+                        <div className="flex justify-between items-start mb-4">
                             <div>
-                                <label className="block text-xs text-slate-400 mb-1">ICMS Origem (%)</label>
-                                <input
-                                    type="number"
-                                    value={originIcmsRate}
-                                    onChange={e => setOriginIcmsRate(e.target.value === "" ? "" : Number(e.target.value))}
-                                    className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white"
-                                    step="0.01"
-                                    placeholder="Ex: 12.0"
+                                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                    <Edit3 className="w-5 h-5 text-indigo-400" /> Registrar Exceção Manual
+                                </h3>
+                                <p className="text-xs text-slate-400 mt-1">Forçar um custo base ou NF manual para este anúncio em caso de exceção.</p>
+                            </div>
+                            <button onClick={() => setIsOverrideModalOpen(false)} className="text-slate-500 hover:text-white"><X size={20}/></button>
+                        </div>
+                        
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-300 mb-1">Custo Base Override R$</label>
+                                <input 
+                                    type="number" step="0.01" 
+                                    value={overrideCost} onChange={e => setOverrideCost(e.target.value)} 
+                                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white outline-none focus:border-indigo-500" 
                                 />
                             </div>
                             <div>
-                                <label className="block text-xs text-slate-400 mb-1">ICMS Destino Padrão (%)</label>
-                                <input
-                                    type="number"
-                                    value={destinationIcmsRate}
-                                    onChange={e => setDestinationIcmsRate(e.target.value === "" ? "" : Number(e.target.value))}
-                                    className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white"
-                                    step="0.01"
-                                    placeholder="Ex: 18.0"
+                                <label className="block text-xs font-bold text-slate-300 mb-1">Valor na NF Override R$</label>
+                                <input 
+                                    type="number" step="0.01" 
+                                    value={overrideNfValue} onChange={e => setOverrideNfValue(e.target.value)} 
+                                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white outline-none focus:border-indigo-500" 
                                 />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-300 mb-1">
+                                    Motivo da Exceção / Validação <span className="text-rose-400">*</span>
+                                </label>
+                                <textarea 
+                                    rows={3}
+                                    value={overrideReason} onChange={e => setOverrideReason(e.target.value)} 
+                                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-indigo-500"
+                                    placeholder="Ex: Custo do Tiny está incorreto. Custo acordado com o fornecedor validado."
+                                />
+                                <div className="flex items-start gap-1 mt-1">
+                                    <Info size={12} className="text-amber-400 mt-0.5 shrink-0" />
+                                    <p className="text-[10px] text-amber-400/80 leading-tight">
+                                        Palavras como "teste", "temporário" ou "correção" manterão a automação bloqueada (COST_SOURCE_CONFLICT). Forneça um motivo validado para liberar o robô.
+                                    </p>
+                                </div>
+                            </div>
+                            
+                            <div className="flex gap-2 mt-4">
+                                <button 
+                                    onClick={() => {
+                                        setOverrideCost("0");
+                                        setOverrideNfValue("0");
+                                        setOverrideReason("REMOVER_OVERRIDE");
+                                        handleSaveOverride();
+                                    }}
+                                    disabled={saving}
+                                    className="flex-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 py-2 rounded-lg font-bold uppercase text-xs tracking-wider transition-colors"
+                                >
+                                    Remover Override
+                                </button>
+                                <button 
+                                    onClick={handleSaveOverride}
+                                    disabled={saving}
+                                    className="flex-[2] bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-lg font-bold uppercase text-xs tracking-wider disabled:opacity-50 transition-colors flex justify-center items-center gap-2"
+                                >
+                                    {saving ? <PremiumLoader /> : <Save size={14} />} Salvar / Validar
+                                </button>
                             </div>
                         </div>
                     </div>
                 </div>
-
-                {/* CUSTO DE COMPRA */}
-                <div className="bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 space-y-4">
-                    <div className="flex items-center gap-2 mb-2">
-                        <AlertCircle className="w-4 h-4 text-rose-400" />
-                        <h4 className="font-semibold text-slate-200">Custo Histórico de Compra</h4>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-[11px] font-medium text-slate-400 mb-1">Custo Real R$</label>
-                            <input
-                                type="number"
-                                value={realCost}
-                                onChange={e => setRealCost(e.target.value === "" ? "" : Number(e.target.value))}
-                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-md px-3 py-1.5 text-sm text-white font-semibold text-emerald-400 focus:border-indigo-500 outline-none"
-                                step="0.01"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-[11px] font-medium text-slate-400 mb-1">Valor na NF R$</label>
-                            <input
-                                type="number"
-                                value={nfValue}
-                                onChange={e => setNfValue(e.target.value === "" ? "" : Number(e.target.value))}
-                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-md px-3 py-1.5 text-sm text-white focus:border-indigo-500 outline-none"
-                                step="0.01"
-                            />
-                            {nfPercentage && (
-                                <div className="mt-1.5 inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20">
-                                    <Info className="w-3 h-3 text-indigo-400" />
-                                    <span className="text-[10px] text-indigo-300 font-medium">NF: {nfPercentage}% do custo</span>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-4 pt-4 border-t border-[#1E293B]">
-                        <div>
-                            <label className="block text-xs text-slate-400 mb-1">Frete Compra R$</label>
-                            <input
-                                type="number"
-                                value={freightCost}
-                                onChange={e => setFreightCost(e.target.value === "" ? "" : Number(e.target.value))}
-                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white"
-                                step="0.01"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs text-slate-400 mb-1">Embalagem R$</label>
-                            <input
-                                type="number"
-                                value={packagingCost}
-                                onChange={e => setPackagingCost(e.target.value === "" ? "" : Number(e.target.value))}
-                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white"
-                                step="0.01"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs text-slate-400 mb-1">Outros Custos R$</label>
-                            <input
-                                type="number"
-                                value={otherCosts}
-                                onChange={e => setOtherCosts(e.target.value === "" ? "" : Number(e.target.value))}
-                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white"
-                                step="0.01"
-                            />
-                        </div>
-                    </div>
-
-                    <div className="pt-4 border-t border-[#1E293B] grid grid-cols-2 gap-4">
-                         <div>
-                            <label className="block text-xs text-slate-400 mb-1">Fornecedor</label>
-                            <input
-                                type="text"
-                                value={supplierName}
-                                onChange={e => setSupplierName(e.target.value)}
-                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white"
-                                placeholder="Nome da Fábrica/Distribuidora"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs text-slate-400 mb-1">Nº NF de Entrada</label>
-                            <input
-                                type="text"
-                                value={nfNumber}
-                                onChange={e => setNfNumber(e.target.value)}
-                                className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white"
-                                placeholder="00000001"
-                            />
-                        </div>
-                    </div>
-                    
-                    <div className="mt-4">
-                        <label className="block text-xs text-slate-400 mb-1">Observações Internas</label>
-                        <textarea
-                            value={taxNotes}
-                            onChange={e => setTaxNotes(e.target.value)}
-                            rows={2}
-                            className="w-full bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 outline-none"
-                            placeholder="Anotações sobre a configuração fiscal"
-                        />
-                    </div>
-                </div>
-            </div>
-
-            {/* RESUMO FISCAL */}
-            <div className="bg-[#131B2C] border border-[#1E293B] rounded-xl p-5 mt-6">
-                <div className="flex items-center gap-2 mb-4">
-                    <Calculator className="w-4 h-4 text-indigo-400" />
-                    <h4 className="font-semibold text-slate-200">Resumo da Configuração</h4>
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                    <div className="bg-[#0B1120] p-3 rounded-lg border border-[#1E293B]">
-                        <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Custo Total de Compra</div>
-                        <div className="text-lg font-semibold text-white">
-                            R$ {((Number(realCost) || 0) + (Number(freightCost) || 0) + (Number(packagingCost) || 0) + (Number(otherCosts) || 0)).toFixed(2)}
-                        </div>
-                    </div>
-                    <div className="bg-[#0B1120] p-3 rounded-lg border border-[#1E293B]">
-                        <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">NCM / CEST</div>
-                        <div className="text-sm font-medium text-slate-300 mt-1">
-                            {ncm || '---'} / {cest || '---'}
-                        </div>
-                    </div>
-                    <div className="bg-[#0B1120] p-3 rounded-lg border border-[#1E293B]">
-                        <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Complexidade Tributária</div>
-                        <div className="flex gap-2 mt-1.5">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${hasSt ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-500'}`}>ST</span>
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${hasIpi ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-500'}`}>IPI</span>
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${hasDifal ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-500'}`}>DIFAL</span>
-                        </div>
-                    </div>
-                    <div className="bg-[#0B1120] p-3 rounded-lg border border-[#1E293B]">
-                        <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Origem</div>
-                        <div className="text-sm font-medium text-slate-300 mt-1 capitalize">
-                            {productOrigin}
-                        </div>
-                    </div>
-                </div>
-            </div>
+            )}
         </div>
     );
 }

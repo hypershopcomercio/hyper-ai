@@ -1,275 +1,185 @@
 import React from 'react';
-import { DollarSign, AlertTriangle, TrendingDown, TrendingUp, Info } from 'lucide-react';
+import { Calculator, ShieldAlert, CheckCircle2, Info, AlertTriangle } from 'lucide-react';
 import { Ad } from '@/types';
 
 interface MarginSimulatorProps {
     ad: Ad;
     simulatedPrice: number;
+    pricingResolution: any;
 }
 
-export function MarginSimulator({ ad, simulatedPrice }: MarginSimulatorProps) {
+export function MarginSimulator({ ad, simulatedPrice, pricingResolution }: MarginSimulatorProps) {
     if (!ad) return null;
 
     const formatCurrency = (value: number) => {
         return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
     };
 
-    // Calculos
-    const targetPrice = simulatedPrice;
+    if (!pricingResolution) {
+        return (
+            <div className="bg-[#13141b] rounded-lg border border-white/5 p-4 mt-4 animate-pulse">
+                <div className="h-4 bg-white/10 rounded w-1/4 mb-4"></div>
+                <div className="h-20 bg-white/5 rounded"></div>
+            </div>
+        );
+    }
 
-    // Custos Variaveis
-    // Infer rates from current ad data if possible, or use absolute values scaled
-    const currentPrice = ad.price || 1;
+    const { status, is_usable_for_automation, calculator_inputs, comparison, cost_candidates, hard_locks, warnings, selection_status } = pricingResolution;
 
-    // Tax Rate inference
-    const taxRate = ad.tax_cost ? (ad.tax_cost / currentPrice) : 0;
-    const tax = targetPrice * taxRate;
+    const targetPrice = simulatedPrice > 0 ? simulatedPrice : ad.price;
 
-    // Commission Rate inference
-    const commissionRate = ad.commission_cost ? (ad.commission_cost / currentPrice) : 0;
-    const commission = targetPrice * commissionRate;
+    const mkp_rate = calculator_inputs?.marketplace_costs?.commission_rate || 0;
+    const mkp_shipping = calculator_inputs?.marketplace_costs?.shipping_cost || 0;
+    const das_rate = calculator_inputs?.sales_tax_rate || 0;
+    const final_product_cost = calculator_inputs?.final_product_cost || 0;
 
-    const shipping = ad.shipping_cost || 0;
-    const productCost = ad.cost || 0;
-
-    // Custos Financeiros (Unit Economics)
-    // Using flat fields from Ad interface
-    const fixedCostShare = ad.fixed_cost_share || 0;
-    const storageCostTotal = ad.storage_cost || 0;
-
-    // Split Storage inferido (similar ao CompetitorMarginSimulator)
-    const inboundCost = ad.inbound_freight_cost || 0;
-    const dailyStorage = (storageCostTotal - inboundCost) > 0 ? (storageCostTotal - inboundCost) : 0;
-
+    const mkp_commission = targetPrice * mkp_rate;
+    const das_value = targetPrice * (das_rate / 100);
+    
     const riskLongTerm = ad.storage_risk_cost || 0;
     const riskDevolution = ad.return_risk_cost || 0;
+    const fixedCostShare = ad.fixed_cost_share || 0;
+    const storageCostTotal = ad.storage_cost || 0;
+    
+    const extra_costs = riskLongTerm + riskDevolution + fixedCostShare + storageCostTotal;
+    const total_cost = final_product_cost + mkp_commission + mkp_shipping + das_value + extra_costs;
+    const profit = targetPrice - total_cost;
+    const margin = targetPrice > 0 ? profit / targetPrice : 0;
+    const min_price_zero_profit = (final_product_cost + mkp_shipping + extra_costs) / (1 - mkp_rate - (das_rate / 100));
 
-    const totalFixed = fixedCostShare + storageCostTotal;
-    const totalRisk = riskDevolution + riskLongTerm;
-
-    const totalCost = productCost + tax + commission + shipping + totalFixed + totalRisk;
-    const margin = targetPrice - totalCost;
-    const marginPercent = targetPrice > 0 ? (margin / targetPrice) : 0;
-
-    const isNegative = margin < 0;
-    const isTight = marginPercent < 0.10 && !isNegative; // Margem < 10%
+    const isBlocked = !is_usable_for_automation;
+    const isConflict = hard_locks?.includes("COST_SOURCE_CONFLICT");
 
     return (
-        <div className="bg-[#13141b] rounded-lg border border-white/5 p-4 mt-4">
-            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-2">
-                <DollarSign size={14} />
-                Simulação de Margem (Unit Economics)
-            </h4>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                <div className="bg-slate-900/50 p-3 rounded border border-white/5">
-                    <p className="text-[10px] text-slate-500 uppercase">Preço Simulado</p>
-                    <p className="text-lg font-bold text-white">{formatCurrency(targetPrice)}</p>
+        <div className="space-y-4">
+            {/* Status Panel */}
+            <div className={`p-4 rounded-xl border ${isBlocked ? 'bg-rose-500/10 border-rose-500/30' : 'bg-emerald-500/10 border-emerald-500/30'} flex flex-col gap-3`}>
+                <div className="flex items-start gap-3">
+                    <div className="mt-0.5">
+                        {isBlocked ? <ShieldAlert className="text-rose-400 w-6 h-6" /> : <CheckCircle2 className="text-emerald-400 w-6 h-6" />}
+                    </div>
+                    <div className="flex-1">
+                        <h3 className={`text-lg font-bold ${isBlocked ? 'text-rose-400' : 'text-emerald-400'}`}>
+                            {isBlocked ? 'Automação Bloqueada: Revisão Necessária' : 'Apto para Automação'}
+                        </h3>
+                        {isConflict && (
+                            <p className="text-sm text-rose-300 font-bold mt-1 uppercase tracking-wider">
+                                Conflito de Custo Detectado
+                            </p>
+                        )}
+                        <p className="text-xs text-slate-300 mt-1">
+                            {isBlocked 
+                                ? 'O robô de precificação não executará ações automáticas enquanto existirem divergências bloqueantes.' 
+                                : 'Os parâmetros fiscais e de custo foram validados com sucesso pela auditoria sistêmica.'}
+                        </p>
+                        
+                        {hard_locks && hard_locks.length > 0 && (
+                            <div className="mt-3 flex gap-2 flex-wrap">
+                                {hard_locks.map((hl: string) => (
+                                    <span key={hl} className="px-2 py-1 bg-rose-500/20 text-rose-300 text-xs font-bold rounded uppercase border border-rose-500/30">
+                                        BLOQUEIO CRÍTICO: {hl}
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+                        {warnings && warnings.length > 0 && (
+                            <div className="mt-2 space-y-1">
+                                {warnings.map((w: string, idx: number) => (
+                                    <p key={idx} className="text-xs text-amber-400 flex items-center gap-1.5">
+                                        <AlertTriangle size={12} /> {w}
+                                    </p>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                 </div>
 
-                <div className="relative group bg-slate-900/50 p-3 rounded border border-white/5 cursor-help transition-colors hover:bg-slate-900/80">
-                    <p className="text-[10px] text-slate-500 uppercase">Custos Variáveis <span className="text-[9px] opacity-70 normal-case">(incl. CMV)</span></p>
-                    <p className="text-sm font-medium text-red-400">
-                        - {formatCurrency(tax + commission + shipping + productCost + totalRisk)}
-                    </p>
-                    <p className="text-[10px] text-slate-600">Com + Imp + Frete + Risco</p>
+                {isConflict && (
+                    <div className="mt-2 bg-rose-500/10 border border-rose-500/20 rounded p-3 text-xs text-rose-200">
+                        <strong className="block text-rose-400 mb-1">Recomendação:</strong>
+                        Existe um Override Manual ativo que diverge significativamente da fonte automática confiável. Você deve revisar a Auditoria Fiscal e Validar o override, Remover o override, ou Usar a fonte automática antes de reativar o robô.
+                    </div>
+                )}
+            </div>
 
-                    {/* Tooltip Variable */}
-                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-80 bg-[#0c0d12] border border-white/10 rounded-lg p-3 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
-                        <div className="space-y-1">
-                            <div className="flex justify-between text-[10px] text-slate-400">
-                                <span>Produto (CMV)</span>
-                                <div>
-                                    <span>{formatCurrency(productCost)}</span>
-                                    <span className="text-slate-600 ml-1">({targetPrice ? ((productCost / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
-                            <div className="flex justify-between text-[10px] text-slate-400">
-                                <span>Comissão ML ({(commissionRate * 100).toFixed(2)}%)</span>
-                                <div>
-                                    <span>{formatCurrency(commission)}</span>
-                                    <span className="text-slate-600 ml-1">({targetPrice ? ((commission / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
-                            <div className="flex justify-between text-[10px] text-slate-400">
-                                <span>Imposto ({(taxRate * 100).toFixed(2)}%)</span>
-                                <div>
-                                    <span>{formatCurrency(tax)}</span>
-                                    <span className="text-slate-600 ml-1">({targetPrice ? ((tax / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
-                            <div className="flex justify-between text-[10px] text-slate-400">
-                                <span>Frete</span>
-                                <div>
-                                    <span>{formatCurrency(shipping)}</span>
-                                    <span className="text-slate-600 ml-1">({targetPrice ? ((shipping / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
-                            <div className="border-t border-white/5 my-1" />
-                            <div className="flex justify-between text-[10px] text-slate-400">
-                                <span>Risco Devolução</span>
-                                <div>
-                                    <span>{formatCurrency(riskDevolution)}</span>
-                                    <span className="text-slate-600 ml-1">({targetPrice ? ((riskDevolution / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
-                            <div className="flex justify-between text-[10px] text-slate-400">
-                                <span>Risco Est. Longo Prazo</span>
-                                <div>
-                                    <span>{formatCurrency(riskLongTerm)}</span>
-                                    <span className="text-slate-600 ml-1">({targetPrice ? ((riskLongTerm / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
-                            <div className="border-t border-white/10 pt-1 mt-1 flex justify-between text-[10px] font-bold text-red-400">
-                                <span>Total Variável + Riscos</span>
-                                <div>
-                                    <span>{formatCurrency(tax + commission + shipping + productCost + totalRisk)}</span>
-                                    <span className="text-red-400/70 ml-1">({targetPrice ? (((tax + commission + shipping + productCost + totalRisk) / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Cost Comparison Panel */}
+                <div className="bg-[#13141b] rounded-xl border border-white/5 p-5">
+                    <h4 className="text-sm font-bold text-slate-200 mb-4 flex items-center gap-2">
+                        <Info size={16} className="text-indigo-400" /> Diagnóstico de Custos
+                    </h4>
+                    
+                    <div className="space-y-3">
+                        <div className="flex justify-between items-center text-sm border-b border-white/5 pb-2">
+                            <span className="text-slate-400">Custo Tiny / Ads (Automático):</span>
+                            <span className="font-mono text-slate-300">{formatCurrency(cost_candidates?.tiny_ads_cost || 0)}</span>
                         </div>
-                        {/* Arrow */}
-                        <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-[#0c0d12] border-l-transparent border-r-transparent"></div>
-                    </div>
-                </div>
-
-                <div className="relative group bg-slate-900/50 p-3 rounded border border-white/5 cursor-help transition-colors hover:bg-slate-900/80">
-                    <p className="text-[10px] text-slate-500 uppercase">Custos Fixos (Rateio)</p>
-                    <p className="text-sm font-medium text-red-400">
-                        - {formatCurrency(totalFixed)}
-                    </p>
-                    <p className="text-[10px] text-slate-600">Operacional + Armaz.</p>
-
-                    {/* Tooltip Fixed */}
-                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-80 bg-[#0c0d12] border border-white/10 rounded-lg p-3 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
-                        <div className="space-y-1">
-                            <div className="flex justify-between text-[10px] text-slate-400">
-                                <span>Rateio por SKU</span>
-                                <div>
-                                    <span>{formatCurrency(fixedCostShare)}</span>
-                                    <span className="text-slate-600 ml-1">({targetPrice ? ((fixedCostShare / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
-                            <div className="border-t border-white/5 my-1" />
-                            <div className="flex justify-between text-[10px] text-slate-400">
-                                <span>Armazenagem (Total)</span>
-                                <div>
-                                    <span>{formatCurrency(storageCostTotal)}</span>
-                                    <span className="text-slate-600 ml-1">({targetPrice ? ((storageCostTotal / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
-                            <div className="ml-2 flex justify-between text-[9px] text-slate-500">
-                                <span>↳ Envio Full (Inbound)</span>
-                                <div>
-                                    <span>{formatCurrency(inboundCost)}</span>
-                                    <span className="text-slate-600 ml-1">({targetPrice ? ((inboundCost / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
-                            <div className="ml-2 flex justify-between text-[9px] text-slate-500">
-                                <span>↳ Diária (Est.)</span>
-                                <div>
-                                    <span>{formatCurrency(dailyStorage)}</span>
-                                    <span className="text-slate-600 ml-1">({targetPrice ? ((dailyStorage / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
+                        <div className="flex justify-between items-center text-sm border-b border-white/5 pb-2">
+                            <span className="text-slate-400">Override Manual Base:</span>
+                            <span className="font-mono text-indigo-400 font-bold">{formatCurrency(cost_candidates?.override_manual_base || 0)}</span>
                         </div>
-                        {/* Arrow */}
-                        <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-[#0c0d12] border-l-transparent border-r-transparent"></div>
+                        <div className="flex justify-between items-center text-sm pt-2">
+                            <span className="text-slate-300 font-bold">Custo Final Resolvido (usado no cálculo):</span>
+                            <span className="font-mono text-white font-bold">{formatCurrency(cost_candidates?.resolved_final_cost || 0)}</span>
+                        </div>
+                        
+                        {comparison?.ad_cost_divergence && (
+                            <div className={`mt-4 p-3 rounded-lg border flex justify-between items-center ${isConflict ? 'bg-rose-500/10 border-rose-500/20' : 'bg-black/30 border-white/5'}`}>
+                                <span className={`text-xs uppercase font-bold tracking-wider ${isConflict ? 'text-rose-400' : 'text-slate-400'}`}>
+                                    Divergência
+                                </span>
+                                <span className={`text-sm font-mono font-bold ${isConflict ? 'text-rose-400' : 'text-amber-400'}`}>
+                                    {formatCurrency(comparison.ad_cost_divergence.diff)} 
+                                    <span className="text-xs ml-1 opacity-70">({comparison.ad_cost_divergence.diff_percent.toFixed(1)}%)</span>
+                                </span>
+                            </div>
+                        )}
                     </div>
                 </div>
 
-                <div className={`relative group p-3 rounded border cursor-help ${isNegative ? 'bg-red-500/10 border-red-500/30' : isTight ? 'bg-amber-500/10 border-amber-500/30' : 'bg-emerald-500/10 border-emerald-500/30'}`}>
-                    <p className="text-[10px] uppercase opacity-70">Margem Líquida Est.</p>
-                    <div className="flex items-center gap-2 flex-wrap">
-                        <span className={`text-lg font-bold ${(() => {
-                            const pct = marginPercent * 100;
-                            if (pct < 5) return 'text-rose-500';
-                            if (pct < 10) return 'text-orange-400';
-                            if (pct <= 15) return 'text-yellow-400';
-                            if (pct <= 20) return 'text-emerald-400';
-                            return 'text-emerald-600';
-                        })()}`}>
-                            {formatCurrency(margin)}
-                        </span>
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded whitespace-nowrap ${(() => {
-                            const pct = marginPercent * 100;
-                            if (pct < 5) return 'bg-rose-500/20 text-rose-300';
-                            if (pct < 10) return 'bg-orange-500/20 text-orange-300';
-                            if (pct <= 15) return 'bg-yellow-500/20 text-yellow-300';
-                            if (pct <= 20) return 'bg-emerald-500/20 text-emerald-300';
-                            return 'bg-emerald-600/20 text-emerald-400';
-                        })()}`}>
-                            {(marginPercent * 100).toFixed(2)}%
-                        </span>
-                    </div>
-
-                    {/* Tooltip Margin Detailed */}
-                    <div className="absolute bottom-full right-0 mb-2 w-80 bg-[#0c0d12] border border-white/10 rounded-lg p-3 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 text-left">
-                        <p className="text-[10px] font-bold text-slate-300 uppercase mb-2 border-b border-white/10 pb-1">Cálculo Final Detalhado</p>
-                        <div className="space-y-1">
-                            <div className="flex justify-between text-[10px] text-emerald-400">
-                                <span>Preço Venda</span>
-                                <span>+ {formatCurrency(targetPrice)}</span>
-                            </div>
-                            <div className="flex justify-between text-[10px] text-red-400">
-                                <span>Custos ML</span>
-                                <div>
-                                    <span>- {formatCurrency(tax + commission + shipping)}</span>
-                                    <span className="text-slate-600 ml-1">({targetPrice ? (((tax + commission + shipping) / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
-                            <div className="flex justify-between text-[10px] text-red-400">
-                                <span>Custo Produto</span>
-                                <div>
-                                    <span>- {formatCurrency(productCost)}</span>
-                                    <span className="text-slate-600 ml-1">({targetPrice ? ((productCost / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
-                            <div className="flex justify-between text-[10px] text-red-400">
-                                <span>Custo Fixo (Rateio)</span>
-                                <div>
-                                    <span>- {formatCurrency(fixedCostShare)}</span>
-                                    <span className="text-slate-600 ml-1">({targetPrice ? ((fixedCostShare / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
-                            <div className="flex justify-between text-[10px] text-red-400">
-                                <span>Armazenagem</span>
-                                <div>
-                                    <span>- {formatCurrency(storageCostTotal)}</span>
-                                    <span className="text-slate-600 ml-1">({targetPrice ? ((storageCostTotal / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
-                            <div className="flex justify-between text-[10px] text-red-400">
-                                <span>Riscos (Devolução + LP)</span>
-                                <div>
-                                    <span>- {formatCurrency(totalRisk)}</span>
-                                    <span className="text-slate-600 ml-1">({targetPrice ? ((totalRisk / targetPrice) * 100).toFixed(1) : 0}%)</span>
-                                </div>
-                            </div>
-                            <div className="border-t border-white/10 pt-1 mt-1 flex justify-between text-xs font-bold text-white">
-                                <span>Resultado Líquido</span>
-                                <div>
-                                    <span>{formatCurrency(margin)}</span>
-                                    <span className={`text-emerald-500 ml-1`}>({(marginPercent * 100).toFixed(2)}%)</span>
-                                </div>
+                {/* Calculation Cascade */}
+                <div className="bg-[#13141b] rounded-xl border border-white/5 p-5">
+                    <h4 className="text-sm font-bold text-slate-200 mb-4 flex items-center gap-2">
+                        <Calculator size={16} className="text-emerald-400" /> Cascata de Cálculo Real
+                    </h4>
+                    
+                    <div className="space-y-2 font-mono text-sm">
+                        <div className="flex justify-between text-emerald-400 font-bold mb-2 pb-2 border-b border-white/10">
+                            <span>Preço de Venda Analisado</span>
+                            <span>{formatCurrency(targetPrice)}</span>
+                        </div>
+                        
+                        <div className="flex justify-between text-slate-400">
+                            <span>(-) Comissão ML ({(mkp_rate * 100).toFixed(1)}%)</span>
+                            <span className="text-rose-400">-{formatCurrency(mkp_commission)}</span>
+                        </div>
+                        <div className="flex justify-between text-slate-400">
+                            <span>(-) Frete ML</span>
+                            <span className="text-rose-400">-{formatCurrency(mkp_shipping)}</span>
+                        </div>
+                        <div className="flex justify-between text-slate-400">
+                            <span>(-) Imposto DAS ({das_rate.toFixed(2)}%)</span>
+                            <span className="text-rose-400">-{formatCurrency(das_value)}</span>
+                        </div>
+                        <div className="flex justify-between text-slate-400 pb-2 border-b border-white/10">
+                            <span>(-) Custo Final Resolvido</span>
+                            <span className="text-rose-400">-{formatCurrency(final_product_cost)}</span>
+                        </div>
+                        
+                        <div className="flex justify-between items-center pt-2">
+                            <span className="font-bold text-white tracking-wider">LUCRO LÍQUIDO</span>
+                            <div className="flex flex-col items-end">
+                                <span className={`text-lg font-bold ${profit < 0 ? 'text-rose-500' : 'text-emerald-400'}`}>
+                                    {formatCurrency(profit)}
+                                </span>
+                                <span className={`text-xs px-1.5 py-0.5 rounded ${profit < 0 ? 'bg-rose-500/20 text-rose-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
+                                    {(margin * 100).toFixed(1)}% Margem
+                                </span>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
-
-            {isNegative && (
-                <div className="flex items-center gap-2 text-red-400 text-xs bg-red-500/10 p-2 rounded border border-red-500/20">
-                    <AlertTriangle size={14} />
-                    <span>Prejuízo operacional estimado com este preço.Revisão necessária.</span>
-                </div>
-            )}
-            {isTight && (
-                <div className="flex items-center gap-2 text-amber-400 text-xs bg-amber-500/10 p-2 rounded border border-amber-500/20">
-                    <AlertTriangle size={14} />
-                    <span>Margem apertada (abaixo de 10%). Acompanhe de perto.</span>
-                </div>
-            )}
         </div>
     );
 }
