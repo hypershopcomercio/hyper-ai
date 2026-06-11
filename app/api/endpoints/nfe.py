@@ -1,7 +1,7 @@
 from flask import jsonify, request
 from app.api import api_bp
 from app.core.database import SessionLocal
-from app.models.nfe import NfeImport, NfeItem
+from app.models.nfe import NfeImport, NfeItem, NfeReconciliation
 from app.services.nfe_parser_service import NfeParserService
 from app.schemas.nfe import ParseStatusEnum
 from app.api.endpoints.auth import require_auth
@@ -229,6 +229,117 @@ def get_nfe_detail(nfe_id):
             }
         })
     except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        db.close()
+
+@api_bp.route("/nfe/<int:nfe_id>/reconciliation", methods=["GET"])
+@require_auth
+def get_nfe_reconciliation(nfe_id):
+    db = SessionLocal()
+    try:
+        recon = db.query(NfeReconciliation).filter(
+            NfeReconciliation.nfe_id == nfe_id,
+            NfeReconciliation.is_active == True
+        ).first()
+        
+        if not recon:
+            return jsonify({"success": True, "data": None})
+            
+        return jsonify({
+            "success": True,
+            "data": {
+                "id": recon.id,
+                "nfe_id": recon.nfe_id,
+                "supplier_cnpj": recon.supplier_cnpj,
+                "fiscal_value_xml": float(recon.fiscal_value_xml),
+                "financial_value_real": float(recon.financial_value_real),
+                "coverage_percent": float(recon.coverage_percent),
+                "financial_multiplier": float(recon.financial_multiplier),
+                "reconciliation_status": recon.reconciliation_status,
+                "source_type": recon.source_type,
+                "evidence_reference": recon.evidence_reference,
+                "notes": recon.notes,
+                "confirmed_by": recon.confirmed_by,
+                "confirmed_at": recon.confirmed_at,
+                "payment_date": recon.payment_date.isoformat() if recon.payment_date else None,
+                "due_date": recon.due_date.isoformat() if recon.due_date else None,
+                "financial_document_id": recon.financial_document_id,
+                "confidence": recon.confidence
+            }
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        db.close()
+
+@api_bp.route("/nfe/<int:nfe_id>/reconciliation", methods=["POST"])
+@require_auth
+def create_nfe_reconciliation(nfe_id):
+    data = request.json
+    if not data or 'financial_value_real' not in data:
+        return jsonify({"success": False, "error": "Missing financial_value_real"}), 400
+        
+    try:
+        financial_value_real = float(data.get('financial_value_real'))
+    except ValueError:
+        return jsonify({"success": False, "error": "Invalid financial_value_real"}), 400
+        
+    if financial_value_real <= 0:
+        return jsonify({"success": False, "error": "Financial value must be greater than zero"}), 400
+        
+    db = SessionLocal()
+    try:
+        nfe = db.query(NfeImport).filter(NfeImport.id == nfe_id).first()
+        if not nfe:
+            return jsonify({"success": False, "error": "NFe not found"}), 404
+            
+        fiscal_value = float(nfe.total_invoice_value)
+        if fiscal_value <= 0:
+            return jsonify({"success": False, "error": "Cannot reconcile an NFe with 0 fiscal value"}), 400
+            
+        # Calcula as métricas
+        coverage_percent = (fiscal_value / financial_value_real) * 100
+        financial_multiplier = financial_value_real / fiscal_value
+        
+        source_type = data.get('source_type', 'user_input')
+        
+        # Desativa ativas anteriores
+        db.query(NfeReconciliation).filter(
+            NfeReconciliation.nfe_id == nfe_id,
+            NfeReconciliation.is_active == True
+        ).update({"is_active": False})
+        
+        # Cria a nova ativa
+        new_recon = NfeReconciliation(
+            nfe_id=nfe_id,
+            supplier_cnpj=nfe.issuer_cnpj,
+            is_active=True,
+            fiscal_value_xml=fiscal_value,
+            financial_value_real=financial_value_real,
+            coverage_percent=coverage_percent,
+            financial_multiplier=financial_multiplier,
+            reconciliation_status='confirmed',
+            source_type=source_type,
+            evidence_reference=data.get('evidence_reference'),
+            notes=data.get('notes'),
+            confirmed_by="system", # TODO user from JWT
+            confirmed_at=datetime.utcnow(),
+            financial_document_id=data.get('financial_document_id')
+        )
+        
+        db.add(new_recon)
+        db.commit()
+        db.refresh(new_recon)
+        
+        return jsonify({
+            "success": True, 
+            "message": "Reconciliation saved successfully",
+            "id": new_recon.id,
+            "financial_multiplier": float(new_recon.financial_multiplier)
+        }), 201
+    except Exception as e:
+        db.rollback()
         return jsonify({"success": False, "error": str(e)}), 500
     finally:
         db.close()

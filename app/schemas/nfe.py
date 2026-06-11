@@ -111,3 +111,51 @@ class NfeImportSchema(BaseModel):
 
     class Config:
         from_attributes = True
+
+class ReconciliationStatusEnum(str, Enum):
+    suggested = "suggested"
+    confirmed = "confirmed"
+    conflict = "conflict"
+    ignored = "ignored"
+
+class ReconciliationSourceEnum(str, Enum):
+    user_input = "user_input"
+    imported_erp = "imported_erp"
+    bank_match = "bank_match"
+    supplier_agreement = "supplier_agreement"
+
+class NfeReconciliationCreate(BaseModel):
+    financial_value_real: Decimal
+    source_type: ReconciliationSourceEnum
+    evidence_reference: Optional[str] = None
+    notes: Optional[str] = None
+    payment_date: Optional[str] = None
+    due_date: Optional[str] = None
+    financial_document_id: Optional[str] = None
+
+class NfeReconciliationSchema(BaseModel):
+    id: int
+    nfe_id: int
+    supplier_cnpj: str
+    is_active: bool
+    fiscal_value_xml: Decimal
+    financial_value_real: Decimal
+    coverage_percent: Decimal
+    financial_multiplier: Decimal
+    reconciliation_status: ReconciliationStatusEnum
+    source_type: ReconciliationSourceEnum
+    evidence_reference: Optional[str] = None
+    notes: Optional[str] = None
+    confirmed_by: Optional[str] = None
+    confirmed_at: Optional[datetime] = None
+    payment_date: Optional[datetime] = None
+    due_date: Optional[datetime] = None
+    financial_document_id: Optional[str] = None
+    bank_transaction_id: Optional[str] = None
+    accounts_payable_id: Optional[str] = None
+    confidence: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True

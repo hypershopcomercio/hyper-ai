@@ -93,3 +93,43 @@ class NfeItem(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     nfe = relationship("NfeImport", back_populates="items")
+
+class NfeReconciliation(Base):
+    __tablename__ = "nfe_reconciliations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    nfe_id = Column(Integer, ForeignKey("nfe_imports.id", ondelete="CASCADE"), nullable=False, index=True)
+    supplier_cnpj = Column(String(14), nullable=False, index=True)
+    
+    is_active = Column(Boolean, default=True)
+    
+    fiscal_value_xml = Column(DECIMAL(15, 4), nullable=False)
+    financial_value_real = Column(DECIMAL(15, 4), nullable=False)
+    
+    coverage_percent = Column(DECIMAL(10, 4), nullable=False)
+    financial_multiplier = Column(DECIMAL(10, 4), nullable=False)
+    
+    reconciliation_status = Column(Enum('suggested', 'confirmed', 'conflict', 'ignored', name='reconciliation_status_enum'), nullable=False)
+    source_type = Column(Enum('user_input', 'imported_erp', 'bank_match', 'supplier_agreement', name='reconciliation_source_enum'), nullable=False)
+    
+    evidence_reference = Column(String(255), nullable=True)
+    notes = Column(Text, nullable=True)
+    
+    created_by = Column(String(100), nullable=True)
+    confirmed_by = Column(String(100), nullable=True)
+    confirmed_at = Column(DateTime, nullable=True)
+    
+    payment_date = Column(Date, nullable=True)
+    due_date = Column(Date, nullable=True)
+    
+    financial_document_id = Column(String(100), nullable=True)
+    bank_transaction_id = Column(String(100), nullable=True)
+    accounts_payable_id = Column(String(100), nullable=True)
+    
+    confidence = Column(Enum('high', 'medium', 'low', name='reconciliation_confidence_enum'), nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    nfe = relationship("NfeImport", backref="reconciliations")
+

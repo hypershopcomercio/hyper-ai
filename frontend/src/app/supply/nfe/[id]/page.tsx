@@ -12,7 +12,14 @@ export default function NFeDetailPage() {
     const params = useParams();
     const router = useRouter();
     const [nfe, setNfe] = useState<any>(null);
+    const [reconciliation, setReconciliation] = useState<any>(null);
     const [loading, setLoading] = useState(true);
+    
+    // Modal states
+    const [showReconModal, setShowReconModal] = useState(false);
+    const [financialValue, setFinancialValue] = useState("");
+    const [submittingRecon, setSubmittingRecon] = useState(false);
+    const [reconError, setReconError] = useState("");
 
     useEffect(() => {
         if (params.id) {
@@ -23,14 +30,44 @@ export default function NFeDetailPage() {
     const loadNfe = async (id: string) => {
         setLoading(true);
         try {
-            const res = await api.get(`/nfe/${id}`);
-            if (res.data.success) {
-                setNfe(res.data.data);
+            const [nfeRes, reconRes] = await Promise.all([
+                api.get(`/nfe/${id}`),
+                api.get(`/nfe/${id}/reconciliation`)
+            ]);
+            
+            if (nfeRes.data.success) {
+                setNfe(nfeRes.data.data);
+            }
+            if (reconRes.data.success) {
+                setReconciliation(reconRes.data.data);
             }
         } catch (error) {
             console.error("Error loading NFe detail", error);
         } finally {
             setLoading(false);
+        }
+    };
+    
+    const handleReconciliationSubmit = async () => {
+        setReconError("");
+        if (!financialValue) return setReconError("Informe o valor financeiro");
+        
+        setSubmittingRecon(true);
+        try {
+            const res = await api.post(`/nfe/${params.id}/reconciliation`, {
+                financial_value_real: parseFloat(financialValue),
+                source_type: 'user_input'
+            });
+            if (res.data.success) {
+                setShowReconModal(false);
+                setFinancialValue("");
+                // Reload
+                loadNfe(params.id as string);
+            }
+        } catch (error: any) {
+            setReconError(error.response?.data?.error || "Erro ao conciliar");
+        } finally {
+            setSubmittingRecon(false);
         }
     };
 
@@ -116,6 +153,83 @@ export default function NFeDetailPage() {
                         </p>
                     </div>
                 </div>
+            </div>
+            
+            {/* Bloco Conciliação Fiscal x Financeira */}
+            <div className="bg-[#121217] border border-white/5 rounded-2xl overflow-hidden p-6 relative">
+                <div className="flex items-center justify-between mb-6">
+                    <div>
+                        <h3 className="font-bold text-white flex items-center gap-2">
+                            <DollarSign size={18} className="text-emerald-500" />
+                            Conciliação Fiscal x Financeira
+                        </h3>
+                        <p className="text-xs text-slate-400 mt-1">
+                            Esta conciliação é interna para controle financeiro e precificação. O XML fiscal permanece inalterado.
+                        </p>
+                    </div>
+                    {!reconciliation && (
+                        <button 
+                            onClick={() => setShowReconModal(true)}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm"
+                        >
+                            Informar Valor Financeiro
+                        </button>
+                    )}
+                </div>
+                
+                {reconciliation ? (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6 bg-[#1A1A24] rounded-xl p-5 border border-white/5">
+                        <div>
+                            <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Valor Fiscal XML</p>
+                            <p className="text-lg font-mono text-white mt-1">
+                                {reconciliation.fiscal_value_xml.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                            </p>
+                        </div>
+                        <div>
+                            <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Valor Financeiro Real</p>
+                            <p className="text-lg font-mono text-emerald-400 font-bold mt-1">
+                                {reconciliation.financial_value_real.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                            </p>
+                        </div>
+                        <div>
+                            <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Cobertura Fiscal</p>
+                            <p className="text-lg font-mono text-white mt-1">
+                                {reconciliation.coverage_percent.toFixed(2)}%
+                            </p>
+                        </div>
+                        <div>
+                            <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Multiplicador Financeiro</p>
+                            <div className="flex items-center gap-2 mt-1">
+                                <p className="text-lg font-mono text-white">
+                                    {reconciliation.financial_multiplier.toFixed(4)}x
+                                </p>
+                                <span className="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 text-[10px] rounded border border-emerald-500/20">Ativo</span>
+                            </div>
+                        </div>
+                        <div className="col-span-full border-t border-white/5 pt-4 mt-2 flex gap-8">
+                            <div>
+                                <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Status</p>
+                                <p className="text-sm text-slate-300 capitalize">{reconciliation.reconciliation_status}</p>
+                            </div>
+                            <div>
+                                <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Fonte</p>
+                                <p className="text-sm text-slate-300 capitalize">{reconciliation.source_type}</p>
+                            </div>
+                            <div>
+                                <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Confirmação</p>
+                                <p className="text-sm text-slate-300">{reconciliation.confirmed_by || 'Sistema'} em {new Date(reconciliation.confirmed_at).toLocaleDateString('pt-BR')}</p>
+                            </div>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="flex items-center justify-center p-8 bg-[#1A1A24] rounded-xl border border-white/5 border-dashed">
+                        <div className="text-center">
+                            <AlertTriangle size={32} className="mx-auto text-amber-500 mb-3 opacity-80" />
+                            <p className="text-amber-500 font-medium">Conciliação Pendente</p>
+                            <p className="text-slate-400 text-sm mt-1">Nenhum valor financeiro real foi vinculado a esta nota ainda.</p>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Items Table */}
@@ -229,6 +343,78 @@ export default function NFeDetailPage() {
                     </table>
                 </div>
             </div>
+            
+            {/* Modal de Conciliação */}
+            {showReconModal && (
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                    <div className="bg-[#121217] border border-white/10 rounded-2xl w-full max-w-md overflow-hidden">
+                        <div className="p-6 border-b border-white/5">
+                            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                <DollarSign className="text-emerald-500" />
+                                Informar Valor Financeiro
+                            </h3>
+                            <p className="text-xs text-slate-400 mt-1">
+                                Digite o valor real pago ou negociado para esta NF. O XML permanecerá inalterado.
+                            </p>
+                        </div>
+                        
+                        <div className="p-6 space-y-4">
+                            <div>
+                                <label className="block text-xs font-medium text-slate-400 mb-1">Valor Fiscal Oficial (NF-e)</label>
+                                <div className="p-3 bg-slate-800/50 rounded-lg text-white font-mono border border-slate-700">
+                                    {nfe.total_invoice_value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <label className="block text-xs font-medium text-emerald-400 mb-1">Valor Financeiro Real</label>
+                                <div className="relative">
+                                    <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                                        <span className="text-slate-500 font-mono">R$</span>
+                                    </div>
+                                    <input 
+                                        type="number"
+                                        step="0.01"
+                                        min="0.01"
+                                        value={financialValue}
+                                        onChange={(e) => setFinancialValue(e.target.value)}
+                                        placeholder="Ex: 16438.74"
+                                        className="w-full bg-[#1A1A24] border border-emerald-500/30 rounded-lg py-2 pl-10 pr-3 text-white font-mono focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all"
+                                    />
+                                </div>
+                                {financialValue && parseFloat(financialValue) > 0 && (
+                                    <p className="text-[10px] text-slate-400 mt-2">
+                                        Multiplicador projetado: <span className="text-emerald-400 font-mono">{(parseFloat(financialValue) / nfe.total_invoice_value).toFixed(4)}x</span>
+                                    </p>
+                                )}
+                            </div>
+                            
+                            {reconError && (
+                                <div className="p-3 bg-rose-500/10 text-rose-400 text-xs rounded border border-rose-500/20">
+                                    {reconError}
+                                </div>
+                            )}
+                        </div>
+                        
+                        <div className="p-6 border-t border-white/5 flex gap-3 justify-end bg-[#1A1A24]">
+                            <button 
+                                onClick={() => setShowReconModal(false)}
+                                disabled={submittingRecon}
+                                className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors"
+                            >
+                                Cancelar
+                            </button>
+                            <button 
+                                onClick={handleReconciliationSubmit}
+                                disabled={submittingRecon || !financialValue}
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {submittingRecon ? 'Salvando...' : 'Confirmar Conciliação'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

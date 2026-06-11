@@ -6,3 +6,4 @@ from app.models.forecast_learning import ForecastLog, CalibrationHistory, Multip
 from app.models.competitor_intelligence import CompetitorMetricsHistory, CompetitorImpactEvent, CompetitorThreatScore
 from app.models.pricing_log import PriceAdjustmentLog
 from app.models.fiscal import MonthlyTaxConfig, ProductTaxProfile, ProductPurchaseCost
+from app.models.nfe import NfeImport, NfeItem, NfeReconciliation
