@@ -1,0 +1,234 @@
+from flask import jsonify, request
+from app.api import api_bp
+from app.core.database import SessionLocal
+from app.models.nfe import NfeImport, NfeItem
+from app.services.nfe_parser_service import NfeParserService
+from app.schemas.nfe import ParseStatusEnum
+from app.api.endpoints.auth import require_auth
+import hashlib
+from datetime import datetime
+
+@api_bp.route("/nfe/upload", methods=["POST"])
+@require_auth
+def upload_nfe():
+    if 'file' not in request.files:
+        return jsonify({"success": False, "error": "No file part"}), 400
+        
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"success": False, "error": "No selected file"}), 400
+        
+    if not file.filename.lower().endswith('.xml'):
+        return jsonify({"success": False, "error": "Invalid file type. Only XML is allowed."}), 400
+
+    try:
+        xml_bytes = file.read()
+        xml_content = xml_bytes.decode('utf-8', errors='ignore')
+        xml_sha256 = hashlib.sha256(xml_bytes).hexdigest()
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Error reading file: {str(e)}"}), 400
+
+    db = SessionLocal()
+    try:
+        # Duplicity Check by SHA256
+        existing_sha = db.query(NfeImport).filter(NfeImport.xml_sha256 == xml_sha256).first()
+        if existing_sha:
+            return jsonify({
+                "success": False, 
+                "error": "XML/NF already imported (SHA256 Match)",
+                "id": existing_sha.id
+            }), 409
+
+        # Parse XML
+        parsed = NfeParserService.parse_xml(xml_content)
+        
+        # If parsing completely failed without access key, abort saving or save as error?
+        if parsed.parse_status == ParseStatusEnum.error and not parsed.access_key:
+            return jsonify({"success": False, "error": f"Invalid XML or missing access key: {parsed.parse_error}"}), 400
+
+        # Duplicity Check by Access Key (in case of different XML formatting but same NF)
+        existing_key = db.query(NfeImport).filter(NfeImport.access_key == parsed.access_key).first()
+        if existing_key:
+            return jsonify({
+                "success": False, 
+                "error": f"XML/NF already imported (Access Key {parsed.access_key})",
+                "id": existing_key.id
+            }), 409
+
+        # Map to SQLAlchemy
+        nfe_db = NfeImport(
+            access_key=parsed.access_key,
+            nfe_number=parsed.metadata.nfe_number,
+            series=parsed.metadata.series,
+            model=parsed.metadata.model,
+            operation_nature=parsed.metadata.operation_nature,
+            environment=parsed.metadata.environment,
+            protocol_number=parsed.metadata.protocol_number,
+            issue_date=parsed.issue_date,
+            issuer_cnpj=parsed.issuer.cnpj,
+            issuer_name=parsed.issuer.name,
+            total_products_value=parsed.totals.products_value,
+            total_invoice_value=parsed.totals.invoice_value,
+            total_freight=parsed.totals.freight,
+            total_insurance=parsed.totals.insurance,
+            total_discount=parsed.totals.discount,
+            total_other=parsed.totals.other,
+            raw_xml=xml_content,
+            xml_sha256=xml_sha256,
+            parse_status=parsed.parse_status.value,
+            parse_error=parsed.parse_error,
+            imported_by="system", # TODO: Get from JWT Auth if available
+            import_source="manual_upload"
+        )
+        db.add(nfe_db)
+        db.flush() # get ID
+
+        for i, item in enumerate(parsed.items):
+            db_item = NfeItem(
+                nfe_id=nfe_db.id,
+                n_item=item.n_item,
+                sku_supplier=item.sku_supplier,
+                description=item.description,
+                ean=item.ean,
+                ncm=item.ncm,
+                cest=item.cest,
+                cfop=item.cfop,
+                cst_csosn=item.cst_csosn,
+                unit=item.unit,
+                quantity=item.quantity,
+                unit_value=item.unit_value,
+                product_value=item.product_value,
+                unit_trib=item.unit_trib,
+                quantity_trib=item.quantity_trib,
+                unit_value_trib=item.unit_value_trib,
+                freight_allocated=item.allocations.freight,
+                insurance_allocated=item.allocations.insurance,
+                discount_allocated=item.allocations.discount,
+                other_allocated=item.allocations.other,
+                ipi_value=item.taxes.get("ipi").value if item.taxes.get("ipi") else 0,
+                ipi_rate=item.taxes.get("ipi").rate if item.taxes.get("ipi") else 0,
+                icms_value=item.taxes.get("icms").value if item.taxes.get("icms") else 0,
+                icms_rate=item.taxes.get("icms").rate if item.taxes.get("icms") else 0,
+                icms_base=item.taxes.get("icms").base if item.taxes.get("icms") else 0,
+                st_value=item.taxes.get("st").value if item.taxes.get("st") else 0,
+                st_rate=item.taxes.get("st").rate if item.taxes.get("st") else 0,
+                st_base=item.taxes.get("st").base if item.taxes.get("st") else 0,
+                total_item_cost_nf=item.calculated_costs.get("total_item_cost_nf", 0),
+                unit_cost_nf=item.calculated_costs.get("unit_cost_nf", 0),
+                link_status="pending"
+            )
+            db.add(db_item)
+
+        db.commit()
+
+        if parsed.parse_status == ParseStatusEnum.error:
+            return jsonify({
+                "success": False,
+                "error": "Saved with parsing errors",
+                "id": nfe_db.id,
+                "parse_error": parsed.parse_error
+            }), 201
+
+        return jsonify({
+            "success": True,
+            "message": "NFe imported successfully",
+            "id": nfe_db.id,
+            "access_key": nfe_db.access_key,
+            "items_count": len(parsed.items)
+        }), 201
+
+    except Exception as e:
+        db.rollback()
+        return jsonify({"success": False, "error": f"Database error: {str(e)}"}), 500
+    finally:
+        db.close()
+
+
+@api_bp.route("/nfe", methods=["GET"])
+@require_auth
+def list_nfe():
+    db = SessionLocal()
+    try:
+        nfes = db.query(NfeImport).order_by(NfeImport.issue_date.desc()).limit(100).all()
+        result = []
+        for nfe in nfes:
+            total_items = db.query(NfeItem).filter(NfeItem.nfe_id == nfe.id).count()
+            linked_items = db.query(NfeItem).filter(NfeItem.nfe_id == nfe.id, NfeItem.link_status == 'confirmed').count()
+            
+            result.append({
+                "id": nfe.id,
+                "access_key": nfe.access_key,
+                "nfe_number": nfe.nfe_number,
+                "series": nfe.series,
+                "issue_date": nfe.issue_date,
+                "issuer_name": nfe.issuer_name,
+                "issuer_cnpj": nfe.issuer_cnpj,
+                "total_invoice_value": float(nfe.total_invoice_value),
+                "status": nfe.status,
+                "parse_status": nfe.parse_status,
+                "items_count": total_items,
+                "linked_items": linked_items,
+                "created_at": nfe.created_at
+            })
+        return jsonify({"success": True, "data": result})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        db.close()
+
+@api_bp.route("/nfe/<int:nfe_id>", methods=["GET"])
+@require_auth
+def get_nfe_detail(nfe_id):
+    db = SessionLocal()
+    try:
+        nfe = db.query(NfeImport).filter(NfeImport.id == nfe_id).first()
+        if not nfe:
+            return jsonify({"success": False, "error": "NFe not found"}), 404
+
+        items = db.query(NfeItem).filter(NfeItem.nfe_id == nfe_id).order_by(NfeItem.n_item).all()
+        
+        items_list = []
+        for item in items:
+            items_list.append({
+                "id": item.id,
+                "n_item": item.n_item,
+                "sku_supplier": item.sku_supplier,
+                "description": item.description,
+                "ean": item.ean,
+                "ncm": item.ncm,
+                "quantity": float(item.quantity),
+                "unit_value": float(item.unit_value),
+                "product_value": float(item.product_value),
+                "unit_cost_nf": float(item.unit_cost_nf),
+                "freight_allocated": float(item.freight_allocated),
+                "ipi_value": float(item.ipi_value),
+                "st_value": float(item.st_value),
+                "icms_value": float(item.icms_value),
+                "linked_sku": item.linked_sku,
+                "linked_mlb_id": item.linked_mlb_id,
+                "link_status": item.link_status,
+                "link_confidence": item.link_confidence,
+                "link_method": item.link_method
+            })
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "id": nfe.id,
+                "access_key": nfe.access_key,
+                "nfe_number": nfe.nfe_number,
+                "issue_date": nfe.issue_date,
+                "issuer_name": nfe.issuer_name,
+                "issuer_cnpj": nfe.issuer_cnpj,
+                "total_invoice_value": float(nfe.total_invoice_value),
+                "total_freight": float(nfe.total_freight),
+                "status": nfe.status,
+                "parse_status": nfe.parse_status,
+                "parse_error": nfe.parse_error,
+                "items": items_list
+            }
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        db.close()
