@@ -105,14 +105,14 @@ export default function NFeListPage() {
     };
 
     return (
-        <div className="min-h-screen bg-[#09090b] text-slate-100 p-8 space-y-8">
+        <div className="min-h-screen bg-[#09090b] text-slate-100 p-6 space-y-6">
             <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-2xl font-bold text-white flex items-center gap-3">
-                        <FileText className="text-blue-500" />
-                        Notas Fiscais (XML)
+                    <h1 className="text-xl font-bold text-white flex items-center gap-2">
+                        <FileText className="text-blue-500" size={20} />
+                        Notas Fiscais
                     </h1>
-                    <p className="text-slate-400 mt-1">Repositório fiscal para cruzamento e automação de custos reais.</p>
+                    <p className="text-xs text-slate-400 mt-1">Repositório fiscal para cruzamento e automação de custos reais.</p>
                 </div>
                 <div>
                     <input 
@@ -126,9 +126,9 @@ export default function NFeListPage() {
                     <button 
                         onClick={() => fileInputRef.current?.click()}
                         disabled={uploading}
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2 h-9"
                     >
-                        {uploading ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+                        {uploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
                         {uploading ? "Processando..." : "Importar XML"}
                     </button>
                 </div>
@@ -136,110 +136,78 @@ export default function NFeListPage() {
 
             {/* Error Message */}
             {uploadError && (
-                <div className="bg-rose-500/10 border border-rose-500/20 rounded-lg p-4 flex items-start gap-3">
-                    <AlertTriangle className="text-rose-500 shrink-0 mt-0.5" size={18} />
+                <div className="bg-rose-500/10 border border-rose-500/20 rounded-lg p-3 flex items-start gap-2">
+                    <AlertTriangle className="text-rose-500 shrink-0 mt-0.5" size={16} />
                     <div>
-                        <h4 className="font-bold text-rose-400 text-sm">Falha na Importação</h4>
-                        <p className="text-sm text-rose-300/80">{uploadError}</p>
+                        <h4 className="font-bold text-rose-400 text-xs">Falha na Importação</h4>
+                        <p className="text-xs text-rose-300/80">{uploadError}</p>
                     </div>
                 </div>
             )}
 
-            {/* Feature Plugs for Future */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="bg-[#121217] border border-blue-500/30 rounded-xl p-4 flex items-center gap-3 opacity-100">
-                    <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center shrink-0">
-                        <FileUp className="text-blue-500" size={18} />
-                    </div>
-                    <div>
-                        <p className="text-sm font-bold text-white">Upload Manual</p>
-                        <p className="text-xs text-slate-500">Ativo na V1</p>
-                    </div>
-                </div>
-                <div className="bg-[#121217] border border-white/5 rounded-xl p-4 flex items-center gap-3 opacity-50 grayscale">
-                    <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center shrink-0">
-                        <Search className="text-slate-400" size={18} />
-                    </div>
-                    <div>
-                        <p className="text-sm font-bold text-white">Chave de Acesso</p>
-                        <p className="text-xs text-slate-500">Em Breve</p>
-                    </div>
-                </div>
-                <div className="bg-[#121217] border border-white/5 rounded-xl p-4 flex items-center gap-3 opacity-50 grayscale">
-                    <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center shrink-0">
-                        <Box className="text-slate-400" size={18} />
-                    </div>
-                    <div>
-                        <p className="text-sm font-bold text-white">Integração Tiny</p>
-                        <p className="text-xs text-slate-500">Em Breve</p>
-                    </div>
-                </div>
-                <div className="bg-[#121217] border border-white/5 rounded-xl p-4 flex items-center gap-3 opacity-50 grayscale">
-                    <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center shrink-0">
-                        <AlertTriangle className="text-slate-400" size={18} />
-                    </div>
-                    <div>
-                        <p className="text-sm font-bold text-white">SEFAZ Auto</p>
-                        <p className="text-xs text-slate-500">Em Breve</p>
-                    </div>
-                </div>
+            {/* Feature Plugs for Future - Compact Banner */}
+            <div className="bg-[#121217] border border-white/5 rounded-lg p-3 flex items-center gap-4 text-xs">
+                <span className="text-slate-500 font-medium">Fontes de importação:</span>
+                <span className="text-blue-400 flex items-center gap-1"><FileUp size={14}/> Upload Manual</span>
+                <span className="text-slate-600 flex items-center gap-1 opacity-60"><Search size={14}/> Chave de Acesso (Breve)</span>
+                <span className="text-slate-600 flex items-center gap-1 opacity-60"><Box size={14}/> ERP/Tiny (Breve)</span>
+                <span className="text-slate-600 flex items-center gap-1 opacity-60"><AlertTriangle size={14}/> SEFAZ Auto (Breve)</span>
             </div>
 
             {/* List */}
-            <div className="bg-[#121217] border border-white/5 rounded-2xl overflow-hidden">
+            <div className="bg-[#121217] border border-white/5 rounded-xl overflow-hidden">
                 {loading ? (
-                    <div className="p-12 flex justify-center"><Loader2 size={32} className="animate-spin text-slate-500" /></div>
+                    <div className="p-8 flex justify-center"><Loader2 size={24} className="animate-spin text-slate-500" /></div>
                 ) : nfes.length === 0 ? (
                     <div className="p-12 text-center text-slate-500">
-                        <FileText size={48} className="mx-auto mb-4 opacity-20" />
-                        <p>Nenhuma nota fiscal importada ainda.</p>
-                        <p className="text-sm mt-1">Faça o upload do seu primeiro XML de compra.</p>
+                        <FileText size={32} className="mx-auto mb-3 opacity-20" />
+                        <p className="text-sm">Nenhuma nota fiscal importada ainda.</p>
                     </div>
                 ) : (
                     <div className="overflow-x-auto">
-                        <table className="w-full text-sm text-left whitespace-nowrap">
+                        <table className="w-full text-xs text-left whitespace-nowrap">
                             <thead className="bg-[#1A1A24] border-b border-white/5 text-slate-400">
                                 <tr>
-                                    <th className="px-6 py-4 font-medium">Nota / Série</th>
-                                    <th className="px-6 py-4 font-medium">Emissão</th>
-                                    <th className="px-6 py-4 font-medium">Fornecedor</th>
-                                    <th className="px-6 py-4 font-medium">Valor Total</th>
-                                    <th className="px-6 py-4 font-medium text-center">Vínculos</th>
-                                    <th className="px-6 py-4 font-medium">Status</th>
-                                    <th className="px-6 py-4 font-medium"></th>
+                                    <th className="px-4 py-3 font-medium">Nota / Série</th>
+                                    <th className="px-4 py-3 font-medium">Emissão</th>
+                                    <th className="px-4 py-3 font-medium">Fornecedor</th>
+                                    <th className="px-4 py-3 font-medium text-right">Valor Fiscal XML</th>
+                                    <th className="px-4 py-3 font-medium text-center">Vínculos</th>
+                                    <th className="px-4 py-3 font-medium">Status</th>
+                                    <th className="px-4 py-3 font-medium"></th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-white/5">
                                 {nfes.map((nfe) => (
                                     <tr key={nfe.id} className="hover:bg-white/[0.02] transition-colors cursor-pointer" onClick={() => router.push(`/supply/nfe/${nfe.id}`)}>
-                                        <td className="px-6 py-4">
+                                        <td className="px-4 py-3">
                                             <div className="font-medium text-white">{nfe.nfe_number || '-'} <span className="text-slate-500 font-normal">/ {nfe.series || '-'}</span></div>
-                                            <div className="text-[10px] text-slate-500 truncate max-w-[200px]" title={nfe.access_key}>{nfe.access_key}</div>
+                                            <div className="text-[10px] text-slate-500 truncate max-w-[180px]" title={nfe.access_key}>{nfe.access_key}</div>
                                         </td>
-                                        <td className="px-6 py-4 text-slate-300">
+                                        <td className="px-4 py-3 text-slate-300">
                                             {new Date(nfe.issue_date).toLocaleDateString('pt-BR')}
                                         </td>
-                                        <td className="px-6 py-4">
-                                            <div className="text-slate-200 truncate max-w-[250px]" title={nfe.issuer_name}>{nfe.issuer_name}</div>
+                                        <td className="px-4 py-3">
+                                            <div className="text-slate-200 truncate max-w-[200px]" title={nfe.issuer_name}>{nfe.issuer_name}</div>
                                             <div className="text-[10px] text-slate-500 font-mono">{nfe.issuer_cnpj}</div>
                                         </td>
-                                        <td className="px-6 py-4 font-mono text-white">
+                                        <td className="px-4 py-3 font-mono text-white text-right">
                                             {nfe.total_invoice_value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                         </td>
-                                        <td className="px-6 py-4 text-center">
-                                            <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-slate-800 text-xs">
+                                        <td className="px-4 py-3 text-center">
+                                            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-800 text-[10px]">
                                                 <span className={nfe.linked_items === nfe.items_count ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
                                                     {nfe.linked_items}
                                                 </span>
                                                 <span className="text-slate-500">/ {nfe.items_count}</span>
                                             </div>
                                         </td>
-                                        <td className="px-6 py-4">
+                                        <td className="px-4 py-3">
                                             {getStatusBadge(nfe.status, nfe.parse_status)}
                                         </td>
-                                        <td className="px-6 py-4 text-right">
-                                            <button className="text-slate-400 hover:text-white p-2" title="Abrir Detalhes">
-                                                <ArrowRight size={16} />
+                                        <td className="px-4 py-3 text-right">
+                                            <button className="text-slate-400 hover:text-white p-1" title="Abrir Detalhes">
+                                                <ArrowRight size={14} />
                                             </button>
                                         </td>
                                     </tr>
