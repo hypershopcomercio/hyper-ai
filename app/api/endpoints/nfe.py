@@ -402,3 +402,43 @@ def confirm_nfe_item_link(nfe_id, item_id):
         return jsonify({"success": False, "error": str(e)}), 500
     finally:
         db.close()
+
+@api_bp.route("/nfe/<int:nfe_id>/linker/confirm_batch", methods=["POST"])
+@require_auth
+def confirm_nfe_batch_link(nfe_id):
+    db = SessionLocal()
+    try:
+        # Confirm only high confidence, suggested items
+        items = db.query(NfeItem).filter(
+            NfeItem.nfe_id == nfe_id,
+            NfeItem.link_status == 'suggested',
+            NfeItem.link_confidence == 'high'
+        ).all()
+        
+        count = 0
+        for item in items:
+            if item.linked_sku:
+                item.link_status = 'confirmed'
+                item.link_method = 'batch_confirmed'
+                count += 1
+                
+        # Ensure Nfe status is updated to linked if all items are confirmed
+        nfe = db.query(NfeImport).filter(NfeImport.id == nfe_id).first()
+        total_items = db.query(NfeItem).filter(NfeItem.nfe_id == nfe_id).count()
+        confirmed_items = db.query(NfeItem).filter(NfeItem.nfe_id == nfe_id, NfeItem.link_status == 'confirmed').count()
+        
+        if confirmed_items == total_items:
+            nfe.status = 'linked'
+            
+        db.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": f"{count} items confirmed in batch",
+            "confirmed_count": count
+        })
+    except Exception as e:
+        db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        db.close()
