@@ -343,3 +343,62 @@ def create_nfe_reconciliation(nfe_id):
         return jsonify({"success": False, "error": str(e)}), 500
     finally:
         db.close()
+
+@api_bp.route("/nfe/<int:nfe_id>/linker/run", methods=["POST"])
+@require_auth
+def run_nfe_linker(nfe_id):
+    from app.services.nfe_linker_service import NfeLinkerService
+    try:
+        summary = NfeLinkerService.run_linker(nfe_id)
+        if "error" in summary:
+            return jsonify({"success": False, "error": summary["error"]}), 404
+            
+        return jsonify({
+            "success": True,
+            "data": summary
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@api_bp.route("/nfe/<int:nfe_id>/items/<int:item_id>/confirm", methods=["POST"])
+@require_auth
+def confirm_nfe_item_link(nfe_id, item_id):
+    data = request.json
+    linked_sku = data.get('linked_sku')
+    linked_mlb_id = data.get('linked_mlb_id')
+    
+    if not linked_sku:
+        return jsonify({"success": False, "error": "linked_sku is required"}), 400
+        
+    db = SessionLocal()
+    try:
+        item = db.query(NfeItem).filter(NfeItem.id == item_id, NfeItem.nfe_id == nfe_id).first()
+        if not item:
+            return jsonify({"success": False, "error": "Item not found"}), 404
+            
+        item.linked_sku = linked_sku
+        item.linked_mlb_id = linked_mlb_id
+        item.link_status = 'confirmed'
+        item.link_confidence = 'high'
+        item.link_method = 'user_confirmed'
+        
+        # Ensure Nfe status is updated to linked if all items are confirmed
+        nfe = db.query(NfeImport).filter(NfeImport.id == nfe_id).first()
+        total_items = db.query(NfeItem).filter(NfeItem.nfe_id == nfe_id).count()
+        confirmed_items = db.query(NfeItem).filter(NfeItem.nfe_id == nfe_id, NfeItem.link_status == 'confirmed').count()
+        
+        # If this item makes it fully confirmed
+        if confirmed_items + 1 == total_items:
+            nfe.status = 'linked'
+            
+        db.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": "Item link confirmed"
+        })
+    except Exception as e:
+        db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        db.close()

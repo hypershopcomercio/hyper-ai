@@ -20,6 +20,9 @@ export default function NFeDetailPage() {
     const [financialValue, setFinancialValue] = useState("");
     const [submittingRecon, setSubmittingRecon] = useState(false);
     const [reconError, setReconError] = useState("");
+    
+    // Linker state
+    const [linkingItems, setLinkingItems] = useState(false);
 
     useEffect(() => {
         if (params.id) {
@@ -68,6 +71,30 @@ export default function NFeDetailPage() {
             setReconError(error.response?.data?.error || "Erro ao conciliar");
         } finally {
             setSubmittingRecon(false);
+        }
+    };
+    
+    const handleRunLinker = async () => {
+        setLinkingItems(true);
+        try {
+            await api.post(`/nfe/${params.id}/linker/run`);
+            loadNfe(params.id as string);
+        } catch (error) {
+            console.error("Error running linker", error);
+        } finally {
+            setLinkingItems(false);
+        }
+    };
+    
+    const confirmLink = async (itemId: number, sku: string, mlbId: string) => {
+        try {
+            await api.post(`/nfe/${params.id}/items/${itemId}/confirm`, {
+                linked_sku: sku,
+                linked_mlb_id: mlbId
+            });
+            loadNfe(params.id as string);
+        } catch (error) {
+            console.error("Error confirming link", error);
         }
     };
 
@@ -229,6 +256,14 @@ export default function NFeDetailPage() {
                         <Box size={16} className="text-slate-400" />
                         Itens da Nota ({nfe.items.length})
                     </h3>
+                    <button 
+                        onClick={handleRunLinker}
+                        disabled={linkingItems || nfe.items.every((i: any) => i.link_status === 'confirmed')}
+                        className="bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 px-3 py-1.5 rounded-md text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
+                    >
+                        <Search size={14} />
+                        {linkingItems ? 'Analisando...' : 'Sugerir Vínculos'}
+                    </button>
                 </div>
                 <div className="overflow-x-auto">
                     <table className="w-full text-xs text-left">
@@ -315,6 +350,28 @@ export default function NFeDetailPage() {
                                                     <CheckCircle size={12} /> SKU: {item.linked_sku}
                                                 </div>
                                                 <div className="text-[9px] text-slate-500">MLB: {item.linked_mlb_id}</div>
+                                            </div>
+                                        ) : item.link_status === 'suggested' ? (
+                                            <div className="flex flex-col items-start gap-1.5">
+                                                <div className="flex items-center gap-1.5 text-blue-400 text-[10px] font-bold">
+                                                    <AlertTriangle size={12} /> Sugerido: {item.linked_sku}
+                                                </div>
+                                                {item.link_confidence === 'high' ? (
+                                                    <div className="text-[9px] text-emerald-400 bg-emerald-400/10 px-1 py-0.5 rounded border border-emerald-400/20">Alta Confiança</div>
+                                                ) : (
+                                                    <div className="text-[9px] text-amber-400 bg-amber-400/10 px-1 py-0.5 rounded border border-amber-400/20">Revisão Necessária</div>
+                                                )}
+                                                <div className="flex gap-1 w-full mt-1">
+                                                    <button 
+                                                        onClick={() => confirmLink(item.id, item.linked_sku, item.linked_mlb_id)}
+                                                        className="flex-1 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/20 px-2 py-1 rounded text-[9px] font-medium transition-colors text-center"
+                                                    >
+                                                        Confirmar
+                                                    </button>
+                                                    <button className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 px-2 py-1 rounded text-[9px] font-medium transition-colors text-center">
+                                                        Trocar
+                                                    </button>
+                                                </div>
                                             </div>
                                         ) : (
                                             <div className="flex flex-col items-start gap-1.5">
