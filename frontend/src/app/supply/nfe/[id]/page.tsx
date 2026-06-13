@@ -93,8 +93,9 @@ export default function NFeDetailPage() {
                 setLinkerSummary(res.data.data);
             }
             loadNfe(params.id as string);
-        } catch (error) {
+        } catch (error: any) {
             console.error("Error running linker", error);
+            alert("Erro ao rodar Linker: " + (error.response?.data?.error || error.message));
         } finally {
             setLinkingItems(false);
         }

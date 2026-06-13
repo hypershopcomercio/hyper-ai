@@ -1,6 +1,8 @@
 import re
 import unicodedata
 import difflib
+import logging
+import traceback
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from app.core.database import SessionLocal
@@ -46,8 +48,12 @@ class NfeLinkerService:
                 "suggestions": []
             }
             
+            # Pre-load ads and tiny products to avoid N+1 and slow loops
+            all_ads = db.query(Ad.id, Ad.sku, Ad.title).all()
+            all_tiny = db.query(TinyProduct.id, TinyProduct.sku, TinyProduct.name).all()
+            
             for item in items:
-                candidates = NfeLinkerService._generate_candidates(db, nfe, item)
+                candidates = NfeLinkerService._generate_candidates(db, nfe, item, all_ads, all_tiny)
                 
                 if not candidates:
                     summary["pending_count"] += 1
@@ -80,43 +86,56 @@ class NfeLinkerService:
                         "candidates": candidates[:3] # Return top 3 for UI
                     })
                 else:
-                    summary["suggested_count"] += 1
-                    
-                    # Update Item
-                    item.linked_sku = top_candidate['sku']
-                    item.linked_mlb_id = top_candidate.get('mlb_id')
-                    item.link_status = 'suggested'
-                    item.link_confidence = top_candidate['confidence']
-                    item.link_method = top_candidate['method']
-                    
-                    summary["suggestions"].append({
-                        "n_item": item.n_item,
-                        "description": item.description,
-                        "status": "suggested",
-                        "suggested_match": top_candidate
-                    })
+                    if top_candidate['confidence'] == 'high':
+                        summary["suggested_count"] += 1
+                        
+                        # Update Item
+                        item.linked_sku = top_candidate['sku']
+                        item.linked_mlb_id = top_candidate.get('mlb_id')
+                        item.link_status = 'suggested'
+                        item.link_confidence = top_candidate['confidence']
+                        item.link_method = top_candidate['method']
+                        
+                        summary["suggestions"].append({
+                            "n_item": item.n_item,
+                            "description": item.description,
+                            "status": "suggested",
+                            "suggested_match": top_candidate
+                        })
+                    else:
+                        summary["pending_count"] += 1
+                        summary["suggestions"].append({
+                            "n_item": item.n_item,
+                            "description": item.description,
+                            "status": "pending",
+                            "reason": "Single candidate but not high confidence",
+                            "candidates": candidates[:3]
+                        })
             
             db.commit()
             return summary
             
         except Exception as e:
             db.rollback()
+            logging.error(f"Error in run_linker: {traceback.format_exc()}")
             raise e
         finally:
             db.close()
 
     @staticmethod
-    def _generate_candidates(db: Session, nfe: NfeImport, item: NfeItem):
+    def _generate_candidates(db: Session, nfe: NfeImport, item: NfeItem, all_ads: list, all_tiny: list):
         candidates = []
         candidate_keys = set() # (sku, mlb_id) to avoid duplicates
         
         def add_candidate(sku, mlb_id, method, score, confidence, explanation):
+            if not sku:
+                return # We cannot link without an SKU
+                
             key = (sku, mlb_id)
             if key in candidate_keys:
                 return
             
             # Additional validation: check if candidate already exists in the candidates list
-            # and only keep the higher score
             existing_idx = next((i for i, c in enumerate(candidates) if c['sku'] == sku and c.get('mlb_id') == mlb_id), -1)
             
             cand = {
@@ -154,7 +173,7 @@ class NfeLinkerService:
                 )
 
         # 2. EAN/GTIN Match (Score: 95)
-        if item.ean and item.ean.strip().upper() not in ["", "SEM GTIN"]:
+        if item.ean and str(item.ean).strip().upper() not in ["", "SEM GTIN", "NONE"]:
             # Check Ad
             ads_by_ean = db.query(Ad).filter(Ad.gtin == item.ean).all()
             for ad in ads_by_ean:
@@ -171,7 +190,6 @@ class NfeLinkerService:
             tiny_by_ean = db.query(TinyProduct).filter(
                 or_(TinyProduct.sku == item.ean, TinyProduct.sku.like(f"%{item.ean}%"))
             ).all()
-            # Careful with like, better strict:
             tiny_strict = [t for t in tiny_by_ean if t.sku == item.ean]
             for t in tiny_strict:
                 add_candidate(
@@ -184,19 +202,20 @@ class NfeLinkerService:
                 )
 
         # 3. Regex MLB (Score: 92)
-        mlb_match = re.search(r'(MLB\s?\d+)', item.description, re.IGNORECASE)
-        if mlb_match:
-            mlb_code = mlb_match.group(1).replace(" ", "").upper()
-            ad = db.query(Ad).filter(Ad.id == mlb_code).first()
-            if ad:
-                add_candidate(
-                    sku=ad.sku,
-                    mlb_id=ad.id,
-                    method="regex_mlb",
-                    score=92,
-                    confidence="high",
-                    explanation=f"Código {mlb_code} extraído da descrição e encontrado na base."
-                )
+        if item.description:
+            mlb_match = re.search(r'(MLB\s?\d+)', item.description, re.IGNORECASE)
+            if mlb_match:
+                mlb_code = mlb_match.group(1).replace(" ", "").upper()
+                ad = db.query(Ad).filter(Ad.id == mlb_code).first()
+                if ad:
+                    add_candidate(
+                        sku=ad.sku,
+                        mlb_id=ad.id,
+                        method="regex_mlb",
+                        score=92,
+                        confidence="high",
+                        explanation=f"Código {mlb_code} extraído da descrição e encontrado na base."
+                    )
 
         # 4. SKU Supplier Exact Match (Score: 85)
         if item.sku_supplier:
@@ -223,48 +242,43 @@ class NfeLinkerService:
                 )
 
         # 5. Fuzzy Description Match (Score variable <= 85)
-        norm_desc = NfeLinkerService.normalize_text(item.description)
-        if norm_desc:
-            # We don't want to load ALL products if we already have a 95+ score?
-            # But the user asked to generate all candidates and check ambiguity.
-            # Loading all strings from DB to do difflib can be slow. We'll do a basic fetch.
-            # We fetch distinct Titles and Tiny Names.
-            # To optimize, we can limit the fuzzy search if we already have a 100 score.
-            # Wait, the rule says "generate candidates". Let's fetch all Ads titles.
-            all_ads = db.query(Ad.id, Ad.sku, Ad.title).all()
-            for ad_id, ad_sku, ad_title in all_ads:
-                if ad_title:
-                    norm_title = NfeLinkerService.normalize_text(ad_title)
-                    ratio = difflib.SequenceMatcher(None, norm_desc, norm_title).ratio()
-                    score = int(ratio * 100)
-                    
-                    if score >= 75:
-                        conf = "medium" if score >= 85 else "low"
-                        add_candidate(
-                            sku=ad_sku,
-                            mlb_id=ad_id,
-                            method="fuzzy_description",
-                            score=score,
-                            confidence=conf,
-                            explanation=f"Similaridade de descrição ({score}%): '{ad_title}'"
-                        )
+        if item.description:
+            norm_desc = NfeLinkerService.normalize_text(item.description)
+            if norm_desc:
+                for ad_id, ad_sku, ad_title in all_ads:
+                    if ad_title and ad_sku:
+                        norm_title = NfeLinkerService.normalize_text(ad_title)
+                        if not norm_title: continue
+                        ratio = difflib.SequenceMatcher(None, norm_desc, norm_title).ratio()
+                        score = int(ratio * 100)
                         
-            all_tiny = db.query(TinyProduct.id, TinyProduct.sku, TinyProduct.name).all()
-            for t_id, t_sku, t_name in all_tiny:
-                if t_name:
-                    norm_name = NfeLinkerService.normalize_text(t_name)
-                    ratio = difflib.SequenceMatcher(None, norm_desc, norm_name).ratio()
-                    score = int(ratio * 100)
-                    
-                    if score >= 75:
-                        conf = "medium" if score >= 85 else "low"
-                        add_candidate(
-                            sku=t_sku,
-                            mlb_id=None,
-                            method="fuzzy_description_tiny",
-                            score=score,
-                            confidence=conf,
-                            explanation=f"Similaridade de descrição Tiny ({score}%): '{t_name}'"
-                        )
+                        if score >= 75:
+                            conf = "medium" if score >= 85 else "low"
+                            add_candidate(
+                                sku=ad_sku,
+                                mlb_id=ad_id,
+                                method="fuzzy_description",
+                                score=score,
+                                confidence=conf,
+                                explanation=f"Similaridade de descrição ({score}%): '{ad_title}'"
+                            )
+                            
+                for t_id, t_sku, t_name in all_tiny:
+                    if t_name and t_sku:
+                        norm_name = NfeLinkerService.normalize_text(t_name)
+                        if not norm_name: continue
+                        ratio = difflib.SequenceMatcher(None, norm_desc, norm_name).ratio()
+                        score = int(ratio * 100)
+                        
+                        if score >= 75:
+                            conf = "medium" if score >= 85 else "low"
+                            add_candidate(
+                                sku=t_sku,
+                                mlb_id=None,
+                                method="fuzzy_description_tiny",
+                                score=score,
+                                confidence=conf,
+                                explanation=f"Similaridade de descrição Tiny ({score}%): '{t_name}'"
+                            )
 
         return candidates
