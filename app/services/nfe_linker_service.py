@@ -27,6 +27,18 @@ class NfeLinkerService:
         return text
 
     @staticmethod
+    def extract_critical_tokens(text: str):
+        if not text: return set(), set(), set(), set()
+        text = text.upper()
+        volts = set(f"{v}V" for v in re.findall(r'\b(110|127|220)\s*[Vv]\b', text))
+        watts = set(f"{w}W" for w in re.findall(r'\b(\d+)\s*[Ww]\b', text))
+        liters = set(f"{l}L" for l in re.findall(r'\b(\d+)\s*[Ll]\b', text))
+        colors = set()
+        for c in ['PRETO', 'BRANCO', 'VERMELHO', 'AZUL', 'AMARELO', 'VERDE', 'CINZA', 'PRATA', 'INOX']:
+            if re.search(rf'\b{c}\b', text): colors.add(c)
+        return volts, watts, liters, colors
+
+    @staticmethod
     def run_linker(nfe_id: int):
         """
         Runs the heuristic linker for all pending items in a specific NFe.
@@ -127,7 +139,7 @@ class NfeLinkerService:
         candidates = []
         candidate_keys = set() # (sku, mlb_id) to avoid duplicates
         
-        def add_candidate(sku, mlb_id, method, score, confidence, explanation):
+        def add_candidate(sku, mlb_id, title, method, score, confidence, explanation):
             if not sku:
                 return # We cannot link without an SKU
                 
@@ -141,6 +153,7 @@ class NfeLinkerService:
             cand = {
                 "sku": sku,
                 "mlb_id": mlb_id,
+                "title": title,
                 "method": method,
                 "score": score,
                 "confidence": confidence,
@@ -166,6 +179,7 @@ class NfeLinkerService:
                 add_candidate(
                     sku=history.linked_sku,
                     mlb_id=history.linked_mlb_id,
+                    title=None,
                     method="historical_supplier_code",
                     score=100,
                     confidence="high",
@@ -180,6 +194,7 @@ class NfeLinkerService:
                 add_candidate(
                     sku=ad.sku,
                     mlb_id=ad.id,
+                    title=ad.title,
                     method="ean_match",
                     score=95,
                     confidence="high",
@@ -195,6 +210,7 @@ class NfeLinkerService:
                 add_candidate(
                     sku=t.sku,
                     mlb_id=None,
+                    title=t.name,
                     method="ean_match_tiny",
                     score=95,
                     confidence="high",
@@ -211,6 +227,7 @@ class NfeLinkerService:
                     add_candidate(
                         sku=ad.sku,
                         mlb_id=ad.id,
+                        title=ad.title,
                         method="regex_mlb",
                         score=92,
                         confidence="high",
@@ -224,6 +241,7 @@ class NfeLinkerService:
                 add_candidate(
                     sku=ad.sku,
                     mlb_id=ad.id,
+                    title=ad.title,
                     method="sku_supplier_match",
                     score=85,
                     confidence="high" if len(ads_by_sku) == 1 else "medium",
@@ -235,6 +253,7 @@ class NfeLinkerService:
                 add_candidate(
                     sku=t.sku,
                     mlb_id=None,
+                    title=t.name,
                     method="sku_supplier_match_tiny",
                     score=85,
                     confidence="high" if len(tiny_by_sku) == 1 else "medium",
@@ -257,6 +276,7 @@ class NfeLinkerService:
                             add_candidate(
                                 sku=ad_sku,
                                 mlb_id=ad_id,
+                                title=ad_title,
                                 method="fuzzy_description",
                                 score=score,
                                 confidence=conf,
@@ -275,10 +295,46 @@ class NfeLinkerService:
                             add_candidate(
                                 sku=t_sku,
                                 mlb_id=None,
+                                title=t_name,
                                 method="fuzzy_description_tiny",
                                 score=score,
                                 confidence=conf,
                                 explanation=f"Similaridade de descrição Tiny ({score}%): '{t_name}'"
                             )
+
+        # Tie-breaker heuristic
+        if len(candidates) > 1 and item.description:
+            i_volts, i_watts, i_liters, i_colors = NfeLinkerService.extract_critical_tokens(item.description)
+            i_cprod = item.sku_supplier.upper() if item.sku_supplier else None
+            
+            for cand in candidates:
+                cand_text = ((cand.get('title') or "") + " " + (cand.get('sku') or "")).upper()
+                c_volts, c_watts, c_liters, c_colors = NfeLinkerService.extract_critical_tokens(cand_text)
+                
+                # Compare Volts
+                if i_volts:
+                    if i_volts & c_volts: cand['score'] += 10
+                    elif c_volts: cand['score'] -= 20
+                
+                # Compare Watts
+                if i_watts:
+                    if i_watts & c_watts: cand['score'] += 10
+                    elif c_watts: cand['score'] -= 20
+                    
+                # Compare Liters
+                if i_liters:
+                    if i_liters & c_liters: cand['score'] += 10
+                    elif c_liters: cand['score'] -= 20
+                    
+                # Compare Colors
+                if i_colors:
+                    if i_colors & c_colors: cand['score'] += 10
+                    elif c_colors: cand['score'] -= 20
+                    
+                # Compare cProd
+                if i_cprod and i_cprod in cand_text:
+                    cand['score'] += 15
+                    
+                # Ensure we don't exceed 100 conceptually, but practically sorting doesn't care.
 
         return candidates
