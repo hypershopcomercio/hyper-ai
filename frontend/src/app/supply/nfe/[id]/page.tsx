@@ -5,7 +5,7 @@ import { api } from '@/lib/api';
 import { useParams, useRouter } from 'next/navigation';
 import {
     ArrowLeft, FileText, Building2, Calendar, DollarSign,
-    Box, CheckCircle, AlertTriangle, Search, Link2, Truck, Info, CheckCircle2, ChevronRight
+    Box, CheckCircle, AlertTriangle, Search, Link2, Truck, Info, CheckCircle2, ChevronRight, XCircle, RefreshCw
 } from 'lucide-react';
 
 export default function NFeDetailPage() {
@@ -23,7 +23,8 @@ export default function NFeDetailPage() {
     
     // Linker state
     const [linkingItems, setLinkingItems] = useState(false);
-    const [linkerSummary, setLinkerSummary] = useState<any>(null); // Results from last run
+    const [linkerSummary, setLinkerSummary] = useState<any>(null);
+    const [hasAutoRun, setHasAutoRun] = useState(false);
     
     // Manual Search Modal
     const [showSearchModal, setShowSearchModal] = useState(false);
@@ -34,13 +35,24 @@ export default function NFeDetailPage() {
     
     // Ambiguous Modal
     const [showAmbiguousModal, setShowAmbiguousModal] = useState(false);
-    const [ambiguousItemData, setAmbiguousItemData] = useState<any>(null); // from linkerSummary
+    const [ambiguousItemData, setAmbiguousItemData] = useState<any>(null);
 
     useEffect(() => {
         if (params.id) {
             loadNfe(params.id as string);
         }
     }, [params.id]);
+
+    useEffect(() => {
+        // Auto-run linker on load if there are pending items and we haven't auto-run yet
+        if (nfe && !hasAutoRun && !linkerSummary) {
+            const hasPending = nfe.items.some((i: any) => i.link_status === 'pending');
+            if (hasPending) {
+                setHasAutoRun(true);
+                handleRunLinker(false); // pass false to avoid loading state block
+            }
+        }
+    }, [nfe, hasAutoRun, linkerSummary]);
 
     const loadNfe = async (id: string) => {
         setLoading(true);
@@ -85,8 +97,8 @@ export default function NFeDetailPage() {
         }
     };
     
-    const handleRunLinker = async () => {
-        setLinkingItems(true);
+    const handleRunLinker = async (showLoadingState = true) => {
+        if (showLoadingState) setLinkingItems(true);
         try {
             const res = await api.post(`/nfe/${params.id}/linker/run`);
             if (res.data.success) {
@@ -95,9 +107,9 @@ export default function NFeDetailPage() {
             loadNfe(params.id as string);
         } catch (error: any) {
             console.error("Error running linker", error);
-            alert("Erro ao rodar Linker: " + (error.response?.data?.error || error.message));
+            if (showLoadingState) alert("Erro ao rodar Linker: " + (error.response?.data?.error || error.message));
         } finally {
-            setLinkingItems(false);
+            if (showLoadingState) setLinkingItems(false);
         }
     };
     
@@ -105,14 +117,13 @@ export default function NFeDetailPage() {
         try {
             await api.post(`/nfe/${params.id}/linker/confirm_batch`);
             loadNfe(params.id as string);
-            // Optionally clear linker summary or update it
             if (linkerSummary) {
-                const newSummary = {...linkerSummary};
-                newSummary.suggested_count = 0;
+                const newSummary = {...linkerSummary, suggested_count: 0};
                 setLinkerSummary(newSummary);
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error("Error confirming batch", error);
+            alert("Erro ao confirmar lote: " + (error.response?.data?.error || error.message));
         }
     };
     
@@ -125,8 +136,19 @@ export default function NFeDetailPage() {
             setShowAmbiguousModal(false);
             setShowSearchModal(false);
             loadNfe(params.id as string);
-        } catch (error) {
+        } catch (error: any) {
             console.error("Error confirming link", error);
+            alert("Erro ao confirmar vínculo: " + (error.response?.data?.error || error.message));
+        }
+    };
+
+    const unlinkItem = async (itemId: number) => {
+        try {
+            await api.post(`/nfe/${params.id}/items/${itemId}/unlink`);
+            loadNfe(params.id as string);
+        } catch (error: any) {
+            console.error("Error unlinking item", error);
+            alert("Erro ao desvincular item: " + (error.response?.data?.error || error.message));
         }
     };
 
@@ -143,7 +165,7 @@ export default function NFeDetailPage() {
         }
     };
 
-    if (loading) {
+    if (loading && !nfe) {
         return <div className="min-h-screen bg-[#09090b] text-slate-100 p-8 flex items-center justify-center">Carregando dados da nota fiscal...</div>;
     }
 
@@ -162,7 +184,6 @@ export default function NFeDetailPage() {
         );
     }
 
-    // Calculando métricas da tabela combinando DB state e Linker state local
     const totalItems = nfe.items.length;
     let confirmedCount = 0;
     let suggestedHighCount = 0;
@@ -170,7 +191,6 @@ export default function NFeDetailPage() {
     let pendingCount = 0;
 
     nfe.items.forEach((item: any) => {
-        // Find if we have an ambiguous state for this item from recent run
         const linkerItem = linkerSummary?.suggestions?.find((s:any) => s.n_item === item.n_item);
         
         if (item.link_status === 'confirmed') {
@@ -311,7 +331,7 @@ export default function NFeDetailPage() {
                         </div>
                     </div>
                 ) : (
-                    <div className="flex items-center justify-center p-6 bg-[#1A1A24] rounded-lg border border-white/5 border-dashed">
+                    <div className="flex items-center justify-center p-4 bg-[#1A1A24] rounded-lg border border-white/5 border-dashed">
                         <div className="text-center flex flex-col items-center">
                             <p className="text-amber-500 text-sm font-medium mb-1">Conciliação Pendente</p>
                             <p className="text-slate-400 text-[11px]">Nenhum valor financeiro real foi vinculado a esta nota ainda.</p>
@@ -320,53 +340,38 @@ export default function NFeDetailPage() {
                 )}
             </div>
 
-            {/* Banner de Resumo do Linker */}
-            <div className="grid grid-cols-5 gap-3">
-                <div className="bg-[#1A1A24] border border-white/5 p-3 rounded-lg">
-                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Total de Itens</p>
-                    <p className="text-xl font-bold text-white">{totalItems}</p>
-                </div>
-                <div className="bg-emerald-500/5 border border-emerald-500/20 p-3 rounded-lg">
-                    <p className="text-[10px] text-emerald-500/80 uppercase font-bold mb-1">Alta Confiança</p>
-                    <p className="text-xl font-bold text-emerald-400">{suggestedHighCount}</p>
-                </div>
-                <div className="bg-amber-500/5 border border-amber-500/20 p-3 rounded-lg">
-                    <p className="text-[10px] text-amber-500/80 uppercase font-bold mb-1">Revisão Necessária</p>
-                    <p className="text-xl font-bold text-amber-400">{reviewNeededCount}</p>
-                </div>
-                <div className="bg-blue-500/5 border border-blue-500/20 p-3 rounded-lg">
-                    <p className="text-[10px] text-blue-500/80 uppercase font-bold mb-1">Pendentes</p>
-                    <p className="text-xl font-bold text-blue-400">{pendingCount}</p>
-                </div>
-                <div className="bg-slate-800 border border-white/10 p-3 rounded-lg">
-                    <p className="text-[10px] text-slate-400 uppercase font-bold mb-1">Confirmados</p>
-                    <p className="text-xl font-bold text-white">{confirmedCount}</p>
-                </div>
-            </div>
-
             {/* Items Table */}
             <div className="bg-[#121217] border border-white/5 rounded-xl overflow-hidden">
-                <div className="p-4 border-b border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-[#1A1A24]">
-                    <h3 className="font-bold text-white flex items-center gap-2 text-sm">
-                        <Box size={16} className="text-slate-400" />
-                        Itens da Nota
-                    </h3>
+                <div className="px-5 py-4 border-b border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-[#1A1A24]">
+                    <div>
+                        <h3 className="font-bold text-white flex items-center gap-2 text-sm">
+                            <Box size={16} className="text-slate-400" />
+                            Itens da Nota ({totalItems})
+                            <span className="text-slate-500 font-normal ml-2">
+                                — {confirmedCount} vinculados
+                                {reviewNeededCount > 0 ? ` · ${reviewNeededCount} revisão necessária` : ''}
+                                {suggestedHighCount > 0 ? ` · ${suggestedHighCount} sugestões` : ''}
+                                {pendingCount > 0 ? ` · ${pendingCount} pendentes` : ''}
+                            </span>
+                        </h3>
+                    </div>
                     <div className="flex gap-2">
                         <button 
-                            onClick={handleRunLinker}
+                            onClick={() => handleRunLinker(true)}
                             disabled={linkingItems || confirmedCount === totalItems}
-                            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-xs font-bold transition-colors disabled:opacity-50 flex items-center gap-2"
+                            className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/5 px-3 py-1.5 rounded-md text-[11px] font-medium transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                            title="Reprocessar sugestões"
                         >
-                            <Search size={14} />
-                            {linkingItems ? 'Analisando vínculos...' : 'Sugerir Vínculos Automaticamente'}
+                            <RefreshCw size={12} className={linkingItems ? 'animate-spin' : ''} />
+                            Reprocessar
                         </button>
                         {suggestedHighCount > 0 && (
                             <button 
                                 onClick={confirmBatch}
-                                className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-md text-xs font-bold transition-colors flex items-center gap-2"
+                                className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-md text-[11px] font-bold transition-colors flex items-center gap-1.5 shadow-md shadow-blue-500/10"
                             >
-                                <CheckCircle2 size={14} />
-                                Confirmar todos ({suggestedHighCount})
+                                <CheckCircle2 size={12} />
+                                Confirmar alta confiança
                             </button>
                         )}
                     </div>
@@ -375,134 +380,124 @@ export default function NFeDetailPage() {
                     <table className="w-full text-xs text-left">
                         <thead className="bg-[#1A1A24] border-b border-white/5 text-slate-400">
                             <tr>
-                                <th className="px-3 py-2 font-medium w-10 text-center">#</th>
-                                <th className="px-3 py-2 font-medium min-w-[200px]">Produto (XML) / Identificadores</th>
-                                <th className="px-3 py-2 font-medium text-right">Qtd</th>
-                                <th className="px-3 py-2 font-medium text-right">Val. Unit</th>
-                                <th className="px-3 py-2 font-medium text-right">Custo Contábil</th>
-                                <th className="px-3 py-2 font-medium min-w-[250px]">Vínculo de Catálogo</th>
+                                <th className="px-4 py-2 font-medium min-w-[250px]">Produto</th>
+                                <th className="px-4 py-2 font-medium text-right w-20">Qtd</th>
+                                <th className="px-4 py-2 font-medium text-right w-24">Valor</th>
+                                <th className="px-4 py-2 font-medium text-right w-28">Custo NF</th>
+                                <th className="px-4 py-2 font-medium min-w-[250px]">Vínculo</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-white/5">
                             {nfe.items.map((item: any) => {
                                 const linkerItem = linkerSummary?.suggestions?.find((s:any) => s.n_item === item.n_item);
                                 const isAmbiguous = linkerItem && linkerItem.status === 'ambiguous';
-                                const isPendingWithoutSuggestion = item.link_status === 'pending' && (!linkerItem || linkerItem.status === 'pending');
                                 
                                 return (
                                 <tr key={item.id} className="hover:bg-white/[0.02] transition-colors group">
-                                    <td className="px-3 py-4 text-center text-slate-500 font-mono text-[10px] align-top">{item.n_item}</td>
-                                    
-                                    {/* Identificadores e Descrição */}
-                                    <td className="px-3 py-4 align-top">
-                                        <div className="font-medium text-slate-200 mb-2 max-w-[300px]" title={item.description}>
+                                    {/* Produto */}
+                                    <td className="px-4 py-3 align-middle">
+                                        <div className="font-medium text-slate-200 line-clamp-2 leading-tight mb-1" title={item.description}>
+                                            <span className="text-slate-500 mr-2 text-[10px] font-mono">{item.n_item}</span>
                                             {item.description}
                                         </div>
-                                        <div className="flex flex-wrap gap-1.5 text-[9px]">
-                                            {item.ean && item.ean !== "SEM GTIN" ? (
-                                                <span className="px-1 py-0.5 bg-blue-500/10 text-blue-400 rounded font-mono border border-blue-500/20">
-                                                    EAN: {item.ean}
-                                                </span>
-                                            ) : (
-                                                <span className="px-1 py-0.5 bg-slate-800 text-slate-500 rounded font-mono">
-                                                    Sem GTIN
-                                                </span>
+                                        <div className="flex gap-2 text-[10px] font-mono">
+                                            {item.ean && item.ean !== "SEM GTIN" && (
+                                                <span className="text-slate-400">EAN: {item.ean}</span>
                                             )}
                                             {item.sku_supplier && (
-                                                <span className="px-1 py-0.5 bg-purple-500/10 text-purple-400 rounded font-mono border border-purple-500/20">
-                                                    cProd: {item.sku_supplier}
-                                                </span>
+                                                <span className="text-slate-400">cProd: {item.sku_supplier}</span>
                                             )}
                                         </div>
                                     </td>
                                     
-                                    {/* Quantidade */}
-                                    <td className="px-3 py-4 text-right font-mono text-slate-300 align-top">
+                                    {/* Qtd */}
+                                    <td className="px-4 py-3 text-right font-mono text-slate-300 align-middle">
                                         {item.quantity}
                                     </td>
                                     
-                                    {/* Valor Unitario Bruto */}
-                                    <td className="px-3 py-4 text-right font-mono text-slate-300 align-top">
+                                    {/* Valor Bruto */}
+                                    <td className="px-4 py-3 text-right font-mono text-slate-300 align-middle">
                                         {item.unit_value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                                        <div className="text-[9px] text-slate-500 mt-1">
-                                            Total: {item.product_value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                                        </div>
                                     </td>
                                     
-                                    {/* Custo Real Resolvido da NF */}
-                                    <td className="px-3 py-4 text-right align-top">
-                                        <div className="font-mono text-emerald-400 font-bold text-sm">
+                                    {/* Custo Resolvido */}
+                                    <td className="px-4 py-3 text-right align-middle">
+                                        <span className="font-mono text-emerald-400 font-bold">
                                             {item.unit_cost_nf.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                                        </div>
+                                        </span>
                                     </td>
                                     
-                                    {/* Status do Vinculo */}
-                                    <td className="px-3 py-4 align-top bg-black/20 border-l border-white/5">
+                                    {/* Vinculo */}
+                                    <td className="px-4 py-3 align-middle">
                                         {item.link_status === 'confirmed' ? (
-                                            <div className="bg-emerald-500/10 border border-emerald-500/20 p-2 rounded-lg">
-                                                <div className="flex items-center gap-1.5 text-emerald-400 text-xs font-bold mb-1">
-                                                    <CheckCircle size={14} /> Confirmado
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <div className="flex items-center gap-1.5 text-emerald-400 text-[11px] font-bold mb-0.5">
+                                                        <CheckCircle size={12} /> Confirmado: {item.linked_sku}
+                                                    </div>
+                                                    {item.linked_mlb_id && <div className="text-[10px] font-mono text-slate-500">MLB: {item.linked_mlb_id}</div>}
                                                 </div>
-                                                <div className="font-mono text-[11px] text-white">SKU: {item.linked_sku}</div>
-                                                {item.linked_mlb_id && <div className="text-[10px] text-slate-400 mt-0.5">MLB: {item.linked_mlb_id}</div>}
+                                                <div className="flex gap-1.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button 
+                                                        onClick={() => { setSearchItem(item); setShowSearchModal(true); }}
+                                                        className="px-2 py-1 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-white/5"
+                                                    >
+                                                        Trocar
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => unlinkItem(item.id)}
+                                                        className="px-2 py-1 text-[10px] bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded border border-rose-500/10"
+                                                    >
+                                                        Desvincular
+                                                    </button>
+                                                </div>
                                             </div>
                                         ) : isAmbiguous ? (
-                                            <div className="bg-amber-500/10 border border-amber-500/20 p-2 rounded-lg flex flex-col gap-2">
-                                                <div className="flex items-center gap-1.5 text-amber-500 text-xs font-bold">
-                                                    <AlertTriangle size={14} /> Revisão Necessária
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div className="flex items-center gap-1.5 text-amber-500 text-[11px] font-bold">
+                                                    <AlertTriangle size={12} /> Revisão necessária
                                                 </div>
-                                                <p className="text-[9px] text-amber-400/80">Múltiplos candidatos encontrados</p>
                                                 <button 
                                                     onClick={() => {
                                                         setAmbiguousItemData({ item, candidates: linkerItem.candidates });
                                                         setShowAmbiguousModal(true);
                                                     }}
-                                                    className="w-full bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 py-1.5 rounded text-[10px] font-bold transition-colors"
+                                                    className="px-2 py-1 text-[10px] bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 rounded font-medium border border-amber-500/20 shrink-0"
                                                 >
-                                                    Ver Opções ({linkerItem.candidates.length})
+                                                    Ver opções
                                                 </button>
                                             </div>
                                         ) : item.link_status === 'suggested' ? (
-                                            <div className="bg-blue-500/10 border border-blue-500/20 p-2 rounded-lg flex flex-col gap-2">
-                                                <div className="flex items-center gap-1.5 text-blue-400 text-xs font-bold">
-                                                    <Info size={14} /> 
-                                                    {item.link_confidence === 'high' ? 'Sugestão: Alta Confiança' : 'Revisão Necessária'}
-                                                </div>
+                                            <div className="flex items-center justify-between gap-3">
                                                 <div>
-                                                    <div className="font-mono text-[11px] text-white">SKU: {item.linked_sku}</div>
-                                                    {item.linked_mlb_id && <div className="text-[10px] text-slate-400 mt-0.5">MLB: {item.linked_mlb_id}</div>}
+                                                    <div className="flex items-center gap-1.5 text-blue-400 text-[11px] font-bold mb-0.5">
+                                                        <Info size={12} /> Sugestão: {item.linked_sku}
+                                                    </div>
+                                                    {item.linked_mlb_id && <div className="text-[10px] font-mono text-slate-500">MLB: {item.linked_mlb_id}</div>}
                                                 </div>
-                                                <div className="flex gap-1.5 w-full mt-1">
+                                                <div className="flex gap-1.5 shrink-0">
                                                     <button 
                                                         onClick={() => confirmLink(item.id, item.linked_sku, item.linked_mlb_id)}
-                                                        className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded text-[10px] font-bold transition-colors text-center"
+                                                        className="px-2 py-1 text-[10px] bg-blue-600 hover:bg-blue-700 text-white rounded font-medium"
                                                     >
                                                         Confirmar
                                                     </button>
                                                     <button 
-                                                        onClick={() => {
-                                                            setSearchItem(item);
-                                                            setShowSearchModal(true);
-                                                        }}
-                                                        className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 py-1.5 rounded text-[10px] font-medium transition-colors text-center"
+                                                        onClick={() => { setSearchItem(item); setShowSearchModal(true); }}
+                                                        className="px-2 py-1 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-white/5 opacity-0 group-hover:opacity-100 transition-opacity"
                                                     >
                                                         Trocar
                                                     </button>
                                                 </div>
                                             </div>
                                         ) : (
-                                            <div className="bg-slate-800/50 border border-white/5 p-2 rounded-lg flex flex-col items-center gap-2">
-                                                <div className="text-slate-500 text-[10px] font-medium uppercase tracking-wider mb-1">
-                                                    Sem sugestão
-                                                </div>
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div className="text-slate-500 text-[11px] font-medium">Sem vínculo</div>
                                                 <button 
-                                                    onClick={() => {
-                                                        setSearchItem(item);
-                                                        setShowSearchModal(true);
-                                                    }}
-                                                    className="w-full flex items-center justify-center gap-1.5 bg-white/5 hover:bg-white/10 text-slate-300 py-1.5 rounded text-[10px] font-medium transition-colors border border-white/10"
+                                                    onClick={() => { setSearchItem(item); setShowSearchModal(true); }}
+                                                    className="px-2 py-1 text-[10px] bg-white/5 hover:bg-white/10 text-slate-300 rounded border border-white/10 shrink-0 flex items-center gap-1"
                                                 >
-                                                    <Search size={12} /> Buscar Manualmente
+                                                    <Search size={10} /> Buscar
                                                 </button>
                                             </div>
                                         )}
@@ -522,7 +517,7 @@ export default function NFeDetailPage() {
                             <div>
                                 <h3 className="text-base font-bold text-white flex items-center gap-2">
                                     <Search className="text-blue-500" size={18} />
-                                    Vincular Produto Manualmente
+                                    Buscar Produto
                                 </h3>
                                 <p className="text-[11px] text-slate-400 mt-1 max-w-xl truncate">
                                     Item XML: <span className="text-slate-300 font-medium">{searchItem?.description}</span>
@@ -571,7 +566,7 @@ export default function NFeDetailPage() {
                                         </div>
                                         <button 
                                             onClick={() => confirmLink(searchItem.id, ad.sku, ad.id)}
-                                            className="bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 border border-blue-500/30 px-3 py-1.5 rounded text-xs font-bold"
+                                            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-xs font-bold"
                                         >
                                             Selecionar
                                         </button>
@@ -591,7 +586,7 @@ export default function NFeDetailPage() {
                             <div>
                                 <h3 className="text-base font-bold text-amber-500 flex items-center gap-2">
                                     <AlertTriangle size={18} />
-                                    Revisão Necessária: Múltiplos Candidatos
+                                    Revisão Necessária
                                 </h3>
                                 <p className="text-[11px] text-slate-400 mt-1 max-w-xl truncate">
                                     Item XML: <span className="text-slate-300 font-medium">{ambiguousItemData.item.description}</span>
@@ -601,7 +596,7 @@ export default function NFeDetailPage() {
                         </div>
                         
                         <div className="flex-1 overflow-y-auto p-5 bg-[#09090b]">
-                            <p className="text-sm text-slate-300 mb-4">O Linker encontrou candidatos muito similares. Escolha o correto:</p>
+                            <p className="text-sm text-slate-300 mb-4">Escolha a opção correta para vínculo:</p>
                             <div className="space-y-3">
                                 {ambiguousItemData.candidates.map((cand: any, idx: number) => (
                                     <div key={idx} className="bg-[#1A1A24] border border-white/5 p-4 rounded-xl flex items-center justify-between hover:border-blue-500/50 transition-colors">
@@ -620,7 +615,7 @@ export default function NFeDetailPage() {
                                             onClick={() => confirmLink(ambiguousItemData.item.id, cand.sku, cand.mlb_id)}
                                             className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2 rounded-lg text-xs font-bold shadow-lg shadow-emerald-500/20"
                                         >
-                                            Confirmar Este
+                                            Confirmar
                                         </button>
                                     </div>
                                 ))}
@@ -630,7 +625,7 @@ export default function NFeDetailPage() {
                 </div>
             )}
             
-            {/* Modal de Conciliação (existente) */}
+            {/* Modal de Conciliação */}
             {showReconModal && (
                 <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[60] p-4">
                     <div className="bg-[#121217] border border-white/10 rounded-2xl w-full max-w-lg overflow-hidden">
@@ -684,18 +679,6 @@ export default function NFeDetailPage() {
                                         className="w-full bg-[#1A1A24] border border-emerald-500/30 rounded-lg py-2 pl-10 pr-3 text-white font-mono focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all text-sm"
                                     />
                                 </div>
-                                {financialValue && parseFloat(financialValue) > 0 && (
-                                    <div className="mt-3 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg flex items-center justify-between">
-                                        <div>
-                                            <p className="text-[10px] text-emerald-500/80 font-bold uppercase tracking-wider">Multiplicador de Custo</p>
-                                            <p className="text-sm text-emerald-400 font-mono font-bold mt-0.5">{(parseFloat(financialValue) / nfe.total_invoice_value).toFixed(4)}x</p>
-                                        </div>
-                                        <div className="text-right">
-                                            <p className="text-[10px] text-emerald-500/80 font-bold uppercase tracking-wider">Cobertura Calculada</p>
-                                            <p className="text-sm text-emerald-400 font-mono font-bold mt-0.5">{((nfe.total_invoice_value / parseFloat(financialValue)) * 100).toFixed(2)}%</p>
-                                        </div>
-                                    </div>
-                                )}
                             </div>
                             
                             {reconError && (
@@ -718,7 +701,7 @@ export default function NFeDetailPage() {
                                 disabled={submittingRecon || !financialValue}
                                 className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                {submittingRecon ? 'Salvando...' : 'Confirmar Conciliação'}
+                                {submittingRecon ? 'Salvando...' : 'Confirmar'}
                             </button>
                         </div>
                     </div>

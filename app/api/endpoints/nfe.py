@@ -403,6 +403,36 @@ def confirm_nfe_item_link(nfe_id, item_id):
     finally:
         db.close()
 
+@api_bp.route("/nfe/<int:nfe_id>/items/<int:item_id>/unlink", methods=["POST"])
+@require_auth
+def unlink_nfe_item(nfe_id, item_id):
+    db = SessionLocal()
+    try:
+        item = db.query(NfeItem).filter(NfeItem.id == item_id, NfeItem.nfe_id == nfe_id).first()
+        if not item:
+            return jsonify({"success": False, "error": "Item not found"}), 404
+            
+        item.linked_sku = None
+        item.linked_mlb_id = None
+        item.link_status = 'pending'
+        item.link_confidence = None
+        item.link_method = 'unlinked_by_user'
+        
+        # Se a NF estava totalmente vinculada, ela volta para pending_link
+        nfe = db.query(NfeImport).filter(NfeImport.id == nfe_id).first()
+        if nfe and nfe.status == 'linked':
+            nfe.status = 'pending_link'
+            
+        db.commit()
+        
+        return jsonify({"success": True, "message": "Item unlinked successfully"})
+    except Exception as e:
+        db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        db.close()
+
+
 @api_bp.route("/nfe/<int:nfe_id>/linker/confirm_batch", methods=["POST"])
 @require_auth
 def confirm_nfe_batch_link(nfe_id):
