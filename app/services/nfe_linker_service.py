@@ -50,7 +50,7 @@ class NfeLinkerService:
             if not nfe:
                 return {"error": "NFe not found"}
                 
-            items = db.query(NfeItem).filter(NfeItem.nfe_id == nfe_id, NfeItem.link_status == 'pending').all()
+            items = db.query(NfeItem).filter(NfeItem.nfe_id == nfe_id, NfeItem.link_status.in_(['pending', 'suggested'])).all()
             
             summary = {
                 "total_items": len(items),

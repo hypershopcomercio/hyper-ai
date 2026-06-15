@@ -491,32 +491,35 @@ def search_linker_candidates():
     try:
         from app.models.ad import Ad
         from app.models.ad_variation import AdVariation
-        from sqlalchemy import or_
+        from sqlalchemy import or_, and_, func
         
-        # Search Ads
-        ads = db.query(Ad).filter(
-            or_(
-                Ad.title.ilike(f"%{query}%"),
-                Ad.sku.ilike(f"%{query}%"),
-                Ad.gtin == query,
-                Ad.id == query
+        query_words = query.split()
+        
+        # 1. Busca por texto combinado (Pai + Variação)
+        # Assumindo que queremos itens onde TODAS as palavras batem em algum lugar da tupla (Pai, Variação)
+        base_query = db.query(Ad, AdVariation).outerjoin(AdVariation, Ad.id == AdVariation.ad_id)
+        
+        for w in query_words:
+            pattern = f"%{w}%"
+            combined_text = func.concat(
+                func.coalesce(Ad.title, ''), ' ', 
+                func.coalesce(Ad.sku, ''), ' ', 
+                func.coalesce(AdVariation.sku, ''), ' ', 
+                func.coalesce(AdVariation.attribute_combination, '')
             )
-        ).limit(50).all()
+            base_query = base_query.filter(combined_text.ilike(pattern))
+            
+        matched_pairs = base_query.limit(100).all()
         
-        # Search Variations (by sku or ad_id or id)
-        variations = db.query(AdVariation).filter(
-            or_(
-                AdVariation.sku.ilike(f"%{query}%"),
-                AdVariation.ad_id == query,
-                AdVariation.id == query
-            )
-        ).limit(50).all()
+        # 2. Busca por IDs exatos
+        exact_ads = db.query(Ad).filter(or_(Ad.id == query, Ad.gtin == query)).all()
+        exact_vars = db.query(AdVariation).filter(or_(AdVariation.id == query, AdVariation.ad_id == query)).all()
         
-        # Combine variations from found Ads + found variations
-        ad_ids = {ad.id for ad in ads}
-        for v in variations:
-            if v.ad_id:
-                ad_ids.add(v.ad_id)
+        ad_ids = {ad.id for ad in exact_ads}
+        for v in exact_vars:
+            if v.ad_id: ad_ids.add(v.ad_id)
+        for ad, var in matched_pairs:
+            ad_ids.add(ad.id)
             
         all_ads_involved = db.query(Ad).filter(Ad.id.in_(ad_ids)).all()
         all_variations_involved = db.query(AdVariation).filter(AdVariation.ad_id.in_(ad_ids)).all()
@@ -529,11 +532,12 @@ def search_linker_candidates():
             var_by_ad[v.ad_id].append(v)
             
         results = []
-        
         for ad_id, ad in ad_map.items():
             vars_for_ad = var_by_ad.get(ad_id, [])
             if vars_for_ad:
                 for v in vars_for_ad:
+                    # Aplicar filtro em memória para os resultados exact match não poluírem muito,
+                    # mas como limitamos no banco, podemos retornar tudo das ads envolvidas.
                     results.append({
                         "mlb_id": ad.id,
                         "variation_id": v.id,
