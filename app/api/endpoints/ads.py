@@ -39,6 +39,138 @@ def _calculate_health_safely(ad):
             }
         }
 
+@api_bp.route('/ads/<string:mlb_id>/variations/audit', methods=['GET'])
+def audit_ad_variations(mlb_id):
+    db = SessionLocal()
+    from app.services.meli_api import MeliApiService
+    from app.models.ad_variation import AdVariation
+    try:
+        # 1. Local Data
+        local_ad = db.query(Ad).filter(Ad.id == mlb_id).first()
+        local_variations = db.query(AdVariation).filter(AdVariation.ad_id == mlb_id).all()
+        
+        # 2. API ML
+        meli = MeliApiService(db_session=db)
+        if not meli.access_token:
+             return jsonify({
+                 "success": False, 
+                 "verdict": "API_ERROR", 
+                 "reason": "Token do Mercado Livre não disponível no banco local.",
+                 "local_ad": local_ad.id if local_ad else None,
+                 "local_variations_count": len(local_variations)
+             }), 500
+             
+        resp = meli.request("GET", f"/items/{mlb_id}")
+        if resp.status_code != 200:
+             return jsonify({
+                 "success": False,
+                 "verdict": "API_ERROR",
+                 "reason": f"Erro {resp.status_code} na API do ML: {resp.text}",
+                 "local_ad": local_ad.id if local_ad else None,
+                 "local_variations_count": len(local_variations)
+             }), resp.status_code
+             
+        ml_data = resp.json()
+        
+        # 3. Extração e Comparação
+        ml_variations = ml_data.get('variations', [])
+        is_catalog_listing = ml_data.get('catalog_listing', False)
+        catalog_product_id = ml_data.get('catalog_product_id')
+        parent_item_id = ml_data.get('parent_item_id')
+        
+        dossier = {
+             "local_ad": {
+                 "id": local_ad.id if local_ad else None,
+                 "sku": local_ad.sku if local_ad else None,
+                 "title": local_ad.title if local_ad else None,
+                 "catalog_product_id": getattr(local_ad, 'catalog_product_id', None)
+             } if local_ad else None,
+             "local_variations": [{
+                 "id": v.id,
+                 "sku": v.sku,
+                 "attribute_combination": v.attribute_combination
+             } for v in local_variations],
+             "ml_payload_summary": {
+                 "id": ml_data.get('id'),
+                 "title": ml_data.get('title'),
+                 "catalog_product_id": catalog_product_id,
+                 "catalog_listing": is_catalog_listing,
+                 "parent_item_id": parent_item_id,
+                 "seller_custom_field": ml_data.get('seller_custom_field'),
+                 "attributes_count": len(ml_data.get('attributes', [])),
+                 "variations_count": len(ml_variations),
+             },
+             "ml_variations_details": []
+        }
+        
+        for v in ml_variations:
+             v_attrs = []
+             v_volts, v_watts, v_liters, v_color = None, None, None, None
+             gtin = None
+             for a in v.get('attribute_combinations', []):
+                 name = a.get('name', '').lower()
+                 val = str(a.get('value_name', ''))
+                 v_attrs.append(f"{a.get('name')}: {val}")
+                 if 'voltagem' in name or 'voltage' in name: v_volts = val
+                 elif 'potência' in name or 'power' in name: v_watts = val
+                 elif 'capacidade' in name or 'capacity' in name or 'volume' in name: v_liters = val
+                 elif 'cor' in name or 'color' in name: v_color = val
+             
+             for a in v.get('attributes', []):
+                 if a.get('id') == 'GTIN': gtin = a.get('value_name')
+                 
+             dossier["ml_variations_details"].append({
+                 "variation_id": v.get('id'),
+                 "parent_mlb_id": mlb_id,
+                 "seller_custom_field": v.get('seller_custom_field'),
+                 "attribute_combinations": ", ".join(v_attrs),
+                 "available_quantity": v.get('available_quantity'),
+                 "price": v.get('price'),
+                 "catalog_product_id": v.get('catalog_product_id'),
+                 "gtin": gtin,
+                 "key_attributes": {
+                     "volts": v_volts,
+                     "watts": v_watts,
+                     "liters": v_liters,
+                     "color": v_color
+                 }
+             })
+             
+        # 4. Veredito
+        if len(ml_variations) > 0 and len(local_variations) == 0:
+            dossier["verdict"] = "ML_HAS_VARIATIONS_LOCAL_MISSING"
+            dossier["reason"] = "Mercado Livre returned variations, but ad_variations has zero rows for this MLB."
+        elif len(ml_variations) > 0 and len(local_variations) > 0:
+            dossier["verdict"] = "LOCAL_HAS_VARIATIONS_OK"
+            dossier["reason"] = "Mercado Livre tem variações e a base local também."
+        elif len(ml_variations) == 0:
+            if catalog_product_id and is_catalog_listing:
+                dossier["verdict"] = "CATALOG_PRODUCT_SEPARATE_AD"
+                dossier["reason"] = "Sem variações embutidas, mas é produto de catálogo. ML provavelmente exige um MLB separado para cada opção de catálogo."
+            elif parent_item_id:
+                dossier["verdict"] = "POSSIBLE_CHILD_OR_CATALOG_LISTING"
+                dossier["reason"] = "Sem variações embutidas, mas possui parent_item_id, indicando que este anúncio é 'filho' ou opt-in de catálogo."
+            else:
+                dossier["verdict"] = "SIMPLE_AD_NO_VARIATIONS"
+                dossier["reason"] = "Anúncio clássico sem array de variações. Opções de compra (se existirem) estão em anúncios separados criados manualmente."
+                
+        if not local_ad:
+            dossier["verdict"] = "LOCAL_AD_NOT_FOUND"
+            dossier["reason"] = "O anúncio não existe na tabela ads local."
+
+        return jsonify({
+            "success": True,
+            **dossier
+        })
+
+    except Exception as e:
+        import traceback
+        logging.error(f"Error auditing variations: {traceback.format_exc()}")
+        return jsonify({"success": False, "verdict": "ERROR", "reason": str(e)}), 500
+    finally:
+        db.close()
+
+
 @api_bp.route('/ads', methods=['GET'])
 def get_ads():
     db = SessionLocal()
