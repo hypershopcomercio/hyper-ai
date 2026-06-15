@@ -105,6 +105,9 @@ class NfeLinkerService:
                     if (top_candidate['score'] - second_candidate['score']) < 8:
                         if top_candidate.get('sku') != second_candidate.get('sku'):
                             is_ambiguous = True
+                        else:
+                            # Official classification
+                            top_candidate['method'] = "MULTIPLE_LISTINGS_SAME_SKU"
                 
                 if is_ambiguous:
                     summary["ambiguous_count"] += 1
