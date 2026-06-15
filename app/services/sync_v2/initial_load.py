@@ -443,6 +443,10 @@ class InitialLoadService:
             status = 'created'
             
         for k, v in parsed.items():
+            if k == 'sku' and not v:
+                # Não sobrescreve sku existente com nulo ou string vazia
+                if existing.sku:
+                    continue
             setattr(existing, k, v)
         
         self._upsert_variations(existing, data.get('variations', []))
