@@ -366,6 +366,8 @@ def confirm_nfe_item_link(nfe_id, item_id):
     data = request.json
     linked_sku = data.get('linked_sku')
     linked_mlb_id = data.get('linked_mlb_id')
+    linked_variation_id = data.get('linked_variation_id')
+    linked_catalog_product_id = data.get('linked_catalog_product_id')
     
     if not linked_sku:
         return jsonify({"success": False, "error": "linked_sku is required"}), 400
@@ -378,6 +380,8 @@ def confirm_nfe_item_link(nfe_id, item_id):
             
         item.linked_sku = linked_sku
         item.linked_mlb_id = linked_mlb_id
+        item.linked_variation_id = linked_variation_id
+        item.linked_catalog_product_id = linked_catalog_product_id
         item.link_status = 'confirmed'
         item.link_confidence = 'high'
         item.link_method = 'user_confirmed'
@@ -414,6 +418,8 @@ def unlink_nfe_item(nfe_id, item_id):
             
         item.linked_sku = None
         item.linked_mlb_id = None
+        item.linked_variation_id = None
+        item.linked_catalog_product_id = None
         item.link_status = 'pending'
         item.link_confidence = None
         item.link_method = 'unlinked_by_user'
@@ -469,6 +475,95 @@ def confirm_nfe_batch_link(nfe_id):
         })
     except Exception as e:
         db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        db.close()
+
+
+@api_bp.route("/nfe/linker/search", methods=["GET"])
+@require_auth
+def search_linker_candidates():
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify({"success": True, "data": []})
+        
+    db = SessionLocal()
+    try:
+        from app.models.ad import Ad
+        from app.models.ad_variation import AdVariation
+        from sqlalchemy import or_
+        
+        # Search Ads
+        ads = db.query(Ad).filter(
+            or_(
+                Ad.title.ilike(f"%{query}%"),
+                Ad.sku.ilike(f"%{query}%"),
+                Ad.gtin == query,
+                Ad.id == query
+            )
+        ).limit(50).all()
+        
+        # Search Variations (by sku or ad_id or id)
+        variations = db.query(AdVariation).filter(
+            or_(
+                AdVariation.sku.ilike(f"%{query}%"),
+                AdVariation.ad_id == query,
+                AdVariation.id == query
+            )
+        ).limit(50).all()
+        
+        # Combine variations from found Ads + found variations
+        ad_ids = {ad.id for ad in ads}
+        for v in variations:
+            if v.ad_id:
+                ad_ids.add(v.ad_id)
+            
+        all_ads_involved = db.query(Ad).filter(Ad.id.in_(ad_ids)).all()
+        all_variations_involved = db.query(AdVariation).filter(AdVariation.ad_id.in_(ad_ids)).all()
+        
+        ad_map = {a.id: a for a in all_ads_involved}
+        var_by_ad = {}
+        for v in all_variations_involved:
+            if v.ad_id not in var_by_ad:
+                var_by_ad[v.ad_id] = []
+            var_by_ad[v.ad_id].append(v)
+            
+        results = []
+        
+        for ad_id, ad in ad_map.items():
+            vars_for_ad = var_by_ad.get(ad_id, [])
+            if vars_for_ad:
+                for v in vars_for_ad:
+                    results.append({
+                        "mlb_id": ad.id,
+                        "variation_id": v.id,
+                        "catalog_product_id": None,
+                        "sku": v.sku,
+                        "title": ad.title,
+                        "variation_name": v.attribute_combination,
+                        "price": v.price,
+                        "thumbnail": ad.thumbnail,
+                        "available_quantity": v.available_quantity
+                    })
+            else:
+                results.append({
+                    "mlb_id": ad.id,
+                    "variation_id": None,
+                    "catalog_product_id": None,
+                    "sku": ad.sku,
+                    "title": ad.title,
+                    "variation_name": None,
+                    "price": ad.price,
+                    "thumbnail": ad.thumbnail,
+                    "available_quantity": ad.available_quantity
+                })
+                
+        # Also could search TinyProduct if needed, but for now ML ads is fine.
+        return jsonify({
+            "success": True,
+            "data": results[:100]
+        })
+    except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
     finally:
         db.close()

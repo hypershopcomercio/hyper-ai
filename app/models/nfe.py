@@ -85,6 +85,8 @@ class NfeItem(Base):
     
     linked_sku = Column(String(100), nullable=True, index=True)
     linked_mlb_id = Column(String(255), nullable=True, index=True)
+    linked_variation_id = Column(String(255), nullable=True, index=True)
+    linked_catalog_product_id = Column(String(255), nullable=True, index=True)
     link_status = Column(Enum('pending', 'suggested', 'confirmed', name='nfe_item_link_status_enum'), default='pending', index=True)
     link_confidence = Column(Enum('high', 'medium', 'low', name='nfe_link_confidence_enum'), nullable=True)
     link_method = Column(String(100), nullable=True)

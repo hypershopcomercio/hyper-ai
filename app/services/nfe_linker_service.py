@@ -64,8 +64,24 @@ class NfeLinkerService:
             all_ads = db.query(Ad.id, Ad.sku, Ad.title).all()
             all_tiny = db.query(TinyProduct.id, TinyProduct.sku, TinyProduct.name).all()
             
+            from app.models.ad_variation import AdVariation
+            all_variations = db.query(
+                AdVariation.id, 
+                AdVariation.ad_id, 
+                AdVariation.sku, 
+                AdVariation.attribute_combination
+            ).all()
+            
+            ads_with_variations = {v.ad_id for v in all_variations if v.ad_id}
+            
+            variations_by_ad = {}
+            for v in all_variations:
+                if v.ad_id not in variations_by_ad:
+                    variations_by_ad[v.ad_id] = []
+                variations_by_ad[v.ad_id].append(v)
+            
             for item in items:
-                candidates = NfeLinkerService._generate_candidates(db, nfe, item, all_ads, all_tiny)
+                candidates = NfeLinkerService._generate_candidates(db, nfe, item, all_ads, all_tiny, variations_by_ad, ads_with_variations)
                 
                 if not candidates:
                     summary["pending_count"] += 1
@@ -104,6 +120,8 @@ class NfeLinkerService:
                         # Update Item
                         item.linked_sku = top_candidate['sku']
                         item.linked_mlb_id = top_candidate.get('mlb_id')
+                        item.linked_variation_id = top_candidate.get('variation_id')
+                        item.linked_catalog_product_id = top_candidate.get('catalog_product_id')
                         item.link_status = 'suggested'
                         item.link_confidence = top_candidate['confidence']
                         item.link_method = top_candidate['method']
@@ -135,25 +153,27 @@ class NfeLinkerService:
             db.close()
 
     @staticmethod
-    def _generate_candidates(db: Session, nfe: NfeImport, item: NfeItem, all_ads: list, all_tiny: list):
+    def _generate_candidates(db: Session, nfe: NfeImport, item: NfeItem, all_ads: list, all_tiny: list, variations_by_ad: dict, ads_with_variations: set):
         candidates = []
-        candidate_keys = set() # (sku, mlb_id) to avoid duplicates
+        candidate_keys = set() # (sku, mlb_id, variation_id) to avoid duplicates
         
-        def add_candidate(sku, mlb_id, title, method, score, confidence, explanation):
+        def add_candidate(sku, mlb_id, variation_id, catalog_product_id, title, variation_name, method, score, confidence, explanation):
             if not sku:
                 return # We cannot link without an SKU
                 
-            key = (sku, mlb_id)
+            key = (sku, mlb_id, variation_id)
             if key in candidate_keys:
                 return
             
-            # Additional validation: check if candidate already exists in the candidates list
-            existing_idx = next((i for i, c in enumerate(candidates) if c['sku'] == sku and c.get('mlb_id') == mlb_id), -1)
+            existing_idx = next((i for i, c in enumerate(candidates) if c['sku'] == sku and c.get('mlb_id') == mlb_id and c.get('variation_id') == variation_id), -1)
             
             cand = {
                 "sku": sku,
                 "mlb_id": mlb_id,
+                "variation_id": variation_id,
+                "catalog_product_id": catalog_product_id,
                 "title": title,
+                "variation_name": variation_name,
                 "method": method,
                 "score": score,
                 "confidence": confidence,
@@ -166,6 +186,37 @@ class NfeLinkerService:
             else:
                 candidates.append(cand)
                 candidate_keys.add(key)
+
+        def expand_ad_candidates(ad_obj, method, score, confidence, explanation_prefix):
+            if ad_obj.id in ads_with_variations:
+                # Add each variation
+                for v in variations_by_ad.get(ad_obj.id, []):
+                    add_candidate(
+                        sku=v.sku,
+                        mlb_id=ad_obj.id,
+                        variation_id=v.id,
+                        catalog_product_id=None,
+                        title=ad_obj.title,
+                        variation_name=v.attribute_combination,
+                        method=method,
+                        score=score,
+                        confidence=confidence,
+                        explanation=f"{explanation_prefix} (Variação: {v.attribute_combination})"
+                    )
+            else:
+                # Add just the parent ad
+                add_candidate(
+                    sku=ad_obj.sku,
+                    mlb_id=ad_obj.id,
+                    variation_id=None,
+                    catalog_product_id=None,
+                    title=ad_obj.title,
+                    variation_name=None,
+                    method=method,
+                    score=score,
+                    confidence=confidence,
+                    explanation=explanation_prefix
+                )
         
         # 1. Historical Supplier Match (Score: 100)
         if item.sku_supplier:
@@ -179,7 +230,10 @@ class NfeLinkerService:
                 add_candidate(
                     sku=history.linked_sku,
                     mlb_id=history.linked_mlb_id,
+                    variation_id=history.linked_variation_id,
+                    catalog_product_id=history.linked_catalog_product_id,
                     title=None,
+                    variation_name=None,
                     method="historical_supplier_code",
                     score=100,
                     confidence="high",
@@ -188,18 +242,9 @@ class NfeLinkerService:
 
         # 2. EAN/GTIN Match (Score: 95)
         if item.ean and str(item.ean).strip().upper() not in ["", "SEM GTIN", "NONE"]:
-            # Check Ad
             ads_by_ean = db.query(Ad).filter(Ad.gtin == item.ean).all()
             for ad in ads_by_ean:
-                add_candidate(
-                    sku=ad.sku,
-                    mlb_id=ad.id,
-                    title=ad.title,
-                    method="ean_match",
-                    score=95,
-                    confidence="high",
-                    explanation=f"EAN {item.ean} bate exatamente com o anúncio {ad.id}."
-                )
+                expand_ad_candidates(ad, "ean_match", 95, "high", f"EAN {item.ean} bate com anúncio {ad.id}")
             
             # Check TinyProduct
             tiny_by_ean = db.query(TinyProduct).filter(
@@ -210,7 +255,10 @@ class NfeLinkerService:
                 add_candidate(
                     sku=t.sku,
                     mlb_id=None,
+                    variation_id=None,
+                    catalog_product_id=None,
                     title=t.name,
+                    variation_name=None,
                     method="ean_match_tiny",
                     score=95,
                     confidence="high",
@@ -224,36 +272,24 @@ class NfeLinkerService:
                 mlb_code = mlb_match.group(1).replace(" ", "").upper()
                 ad = db.query(Ad).filter(Ad.id == mlb_code).first()
                 if ad:
-                    add_candidate(
-                        sku=ad.sku,
-                        mlb_id=ad.id,
-                        title=ad.title,
-                        method="regex_mlb",
-                        score=92,
-                        confidence="high",
-                        explanation=f"Código {mlb_code} extraído da descrição e encontrado na base."
-                    )
+                    expand_ad_candidates(ad, "regex_mlb", 92, "high", f"Código {mlb_code} extraído da descrição")
 
         # 4. SKU Supplier Exact Match (Score: 85)
         if item.sku_supplier:
             ads_by_sku = db.query(Ad).filter(Ad.sku == item.sku_supplier).all()
             for ad in ads_by_sku:
-                add_candidate(
-                    sku=ad.sku,
-                    mlb_id=ad.id,
-                    title=ad.title,
-                    method="sku_supplier_match",
-                    score=85,
-                    confidence="high" if len(ads_by_sku) == 1 else "medium",
-                    explanation=f"Código do fornecedor {item.sku_supplier} bate com nosso SKU."
-                )
+                conf = "high" if len(ads_by_sku) == 1 else "medium"
+                expand_ad_candidates(ad, "sku_supplier_match", 85, conf, f"Código do fornecedor {item.sku_supplier} bate com nosso SKU")
             
             tiny_by_sku = db.query(TinyProduct).filter(TinyProduct.sku == item.sku_supplier).all()
             for t in tiny_by_sku:
                 add_candidate(
                     sku=t.sku,
                     mlb_id=None,
+                    variation_id=None,
+                    catalog_product_id=None,
                     title=t.name,
+                    variation_name=None,
                     method="sku_supplier_match_tiny",
                     score=85,
                     confidence="high" if len(tiny_by_sku) == 1 else "medium",
@@ -265,7 +301,7 @@ class NfeLinkerService:
             norm_desc = NfeLinkerService.normalize_text(item.description)
             if norm_desc:
                 for ad_id, ad_sku, ad_title in all_ads:
-                    if ad_title and ad_sku:
+                    if ad_title:
                         norm_title = NfeLinkerService.normalize_text(ad_title)
                         if not norm_title: continue
                         ratio = difflib.SequenceMatcher(None, norm_desc, norm_title).ratio()
@@ -273,15 +309,34 @@ class NfeLinkerService:
                         
                         if score >= 75:
                             conf = "medium" if score >= 85 else "low"
-                            add_candidate(
-                                sku=ad_sku,
-                                mlb_id=ad_id,
-                                title=ad_title,
-                                method="fuzzy_description",
-                                score=score,
-                                confidence=conf,
-                                explanation=f"Similaridade de descrição ({score}%): '{ad_title}'"
-                            )
+                            if ad_id in ads_with_variations:
+                                for v in variations_by_ad.get(ad_id, []):
+                                    add_candidate(
+                                        sku=v.sku,
+                                        mlb_id=ad_id,
+                                        variation_id=v.id,
+                                        catalog_product_id=None,
+                                        title=ad_title,
+                                        variation_name=v.attribute_combination,
+                                        method="fuzzy_description",
+                                        score=score,
+                                        confidence=conf,
+                                        explanation=f"Similaridade de descrição ({score}%): '{ad_title}' (Variação: {v.attribute_combination})"
+                                    )
+                            else:
+                                if ad_sku:
+                                    add_candidate(
+                                        sku=ad_sku,
+                                        mlb_id=ad_id,
+                                        variation_id=None,
+                                        catalog_product_id=None,
+                                        title=ad_title,
+                                        variation_name=None,
+                                        method="fuzzy_description",
+                                        score=score,
+                                        confidence=conf,
+                                        explanation=f"Similaridade de descrição ({score}%): '{ad_title}'"
+                                    )
                             
                 for t_id, t_sku, t_name in all_tiny:
                     if t_name and t_sku:
@@ -295,7 +350,10 @@ class NfeLinkerService:
                             add_candidate(
                                 sku=t_sku,
                                 mlb_id=None,
+                                variation_id=None,
+                                catalog_product_id=None,
                                 title=t_name,
+                                variation_name=None,
                                 method="fuzzy_description_tiny",
                                 score=score,
                                 confidence=conf,
@@ -308,7 +366,7 @@ class NfeLinkerService:
             i_cprod = item.sku_supplier.upper() if item.sku_supplier else None
             
             for cand in candidates:
-                cand_text = ((cand.get('title') or "") + " " + (cand.get('sku') or "")).upper()
+                cand_text = ((cand.get('title') or "") + " " + (cand.get('variation_name') or "") + " " + (cand.get('sku') or "")).upper()
                 c_volts, c_watts, c_liters, c_colors = NfeLinkerService.extract_critical_tokens(cand_text)
                 
                 # Compare Volts
@@ -334,7 +392,5 @@ class NfeLinkerService:
                 # Compare cProd
                 if i_cprod and i_cprod in cand_text:
                     cand['score'] += 15
-                    
-                # Ensure we don't exceed 100 conceptually, but practically sorting doesn't care.
 
         return candidates

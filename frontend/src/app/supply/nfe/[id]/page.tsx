@@ -127,11 +127,13 @@ export default function NFeDetailPage() {
         }
     };
     
-    const confirmLink = async (itemId: number, sku: string, mlbId: string) => {
+    const confirmLink = async (itemId: number, sku: string, mlbId: string, variationId: string | null = null, catalogId: string | null = null) => {
         try {
             await api.post(`/nfe/${params.id}/items/${itemId}/confirm`, {
                 linked_sku: sku,
-                linked_mlb_id: mlbId
+                linked_mlb_id: mlbId,
+                linked_variation_id: variationId,
+                linked_catalog_product_id: catalogId
             });
             setShowAmbiguousModal(false);
             setShowSearchModal(false);
@@ -156,7 +158,7 @@ export default function NFeDetailPage() {
         if (!searchQuery) return;
         setIsSearching(true);
         try {
-            const res = await api.get(`/ads?search=${encodeURIComponent(searchQuery)}&limit=10`);
+            const res = await api.get(`/nfe/linker/search?q=${encodeURIComponent(searchQuery)}`);
             setSearchResults(res.data.data || []);
         } catch (error) {
             console.error(error);
@@ -435,7 +437,11 @@ export default function NFeDetailPage() {
                                                     <div className="flex items-center gap-1.5 text-emerald-400 text-[11px] font-bold mb-0.5">
                                                         <CheckCircle size={12} /> Confirmado: {item.linked_sku}
                                                     </div>
-                                                    {item.linked_mlb_id && <div className="text-[10px] font-mono text-slate-500">MLB: {item.linked_mlb_id}</div>}
+                                                    <div className="text-[10px] font-mono text-slate-500">
+                                                        MLB: {item.linked_mlb_id}
+                                                        {item.linked_variation_id && ` | Var: ${item.linked_variation_id}`}
+                                                        {item.linked_catalog_product_id && ` | Cat: ${item.linked_catalog_product_id}`}
+                                                    </div>
                                                 </div>
                                                 <div className="flex gap-1.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                                                     <button 
@@ -473,11 +479,15 @@ export default function NFeDetailPage() {
                                                     <div className="flex items-center gap-1.5 text-blue-400 text-[11px] font-bold mb-0.5">
                                                         <Info size={12} /> Sugestão: {item.linked_sku}
                                                     </div>
-                                                    {item.linked_mlb_id && <div className="text-[10px] font-mono text-slate-500">MLB: {item.linked_mlb_id}</div>}
+                                                    <div className="text-[10px] font-mono text-slate-500">
+                                                        MLB: {item.linked_mlb_id}
+                                                        {item.linked_variation_id && ` | Var: ${item.linked_variation_id}`}
+                                                        {item.linked_catalog_product_id && ` | Cat: ${item.linked_catalog_product_id}`}
+                                                    </div>
                                                 </div>
                                                 <div className="flex gap-1.5 shrink-0">
                                                     <button 
-                                                        onClick={() => confirmLink(item.id, item.linked_sku, item.linked_mlb_id)}
+                                                        onClick={() => confirmLink(item.id, item.linked_sku, item.linked_mlb_id, item.linked_variation_id, item.linked_catalog_product_id)}
                                                         className="px-2 py-1 text-[10px] bg-blue-600 hover:bg-blue-700 text-white rounded font-medium"
                                                     >
                                                         Confirmar
@@ -551,22 +561,25 @@ export default function NFeDetailPage() {
                                 </div>
                             )}
                             <div className="space-y-2">
-                                {searchResults.map((ad: any) => (
-                                    <div key={ad.id} className="bg-[#1A1A24] border border-white/5 p-3 rounded-lg flex items-center justify-between hover:border-blue-500/50 transition-colors">
+                                {searchResults.map((cand: any, idx: number) => (
+                                    <div key={`${cand.mlb_id}-${cand.variation_id || idx}`} className="bg-[#1A1A24] border border-white/5 p-3 rounded-lg flex items-center justify-between hover:border-blue-500/50 transition-colors">
                                         <div className="flex items-start gap-3">
-                                            {ad.thumbnail && <img src={ad.thumbnail} alt="" className="w-10 h-10 rounded object-cover" />}
+                                            {cand.thumbnail && <img src={cand.thumbnail} alt="" className="w-10 h-10 rounded object-cover" />}
                                             <div>
-                                                <p className="text-sm text-slate-200 font-medium line-clamp-1">{ad.title}</p>
+                                                <p className="text-sm text-slate-200 font-medium line-clamp-1">{cand.title}</p>
+                                                {cand.variation_name && <p className="text-xs text-blue-400 font-medium">Variação: {cand.variation_name}</p>}
                                                 <div className="flex items-center gap-3 mt-1 text-[11px] font-mono text-slate-400">
-                                                    <span>SKU: {ad.sku || 'N/A'}</span>
-                                                    <span>MLB: {ad.id}</span>
-                                                    <span className="text-emerald-400">{Number(ad.price).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                                                    <span>SKU: {cand.sku || 'N/A'}</span>
+                                                    <span>MLB: {cand.mlb_id}</span>
+                                                    {cand.variation_id && <span>VAR: {cand.variation_id}</span>}
+                                                    {cand.catalog_product_id && <span>CAT: {cand.catalog_product_id}</span>}
+                                                    <span className="text-emerald-400">{Number(cand.price).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                                                 </div>
                                             </div>
                                         </div>
                                         <button 
-                                            onClick={() => confirmLink(searchItem.id, ad.sku, ad.id)}
-                                            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-xs font-bold"
+                                            onClick={() => confirmLink(searchItem.id, cand.sku, cand.mlb_id, cand.variation_id, cand.catalog_product_id)}
+                                            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-xs font-bold shrink-0"
                                         >
                                             Selecionar
                                         </button>
@@ -604,16 +617,19 @@ export default function NFeDetailPage() {
                                             <div className="flex items-center gap-2">
                                                 <span className="font-mono text-sm text-white font-bold">{cand.sku}</span>
                                                 <span className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded font-mono">MLB: {cand.mlb_id || 'N/A'}</span>
+                                                {cand.variation_id && <span className="text-[10px] bg-blue-900/40 text-blue-400 px-1.5 py-0.5 rounded font-mono border border-blue-500/20">VAR: {cand.variation_id}</span>}
                                             </div>
-                                            <p className="text-xs text-slate-400">{cand.explanation}</p>
+                                            <p className="text-xs text-slate-300 font-medium">{cand.title}</p>
+                                            {cand.variation_name && <p className="text-xs text-blue-400 font-medium">↳ {cand.variation_name}</p>}
+                                            <p className="text-xs text-slate-500 mt-1">{cand.explanation}</p>
                                             <div className="flex gap-3 text-[10px] font-bold uppercase tracking-wider mt-2">
                                                 <span className="text-blue-400">Score: {cand.score}</span>
                                                 <span className="text-emerald-500">Heurística: {cand.method}</span>
                                             </div>
                                         </div>
                                         <button 
-                                            onClick={() => confirmLink(ambiguousItemData.item.id, cand.sku, cand.mlb_id)}
-                                            className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2 rounded-lg text-xs font-bold shadow-lg shadow-emerald-500/20"
+                                            onClick={() => confirmLink(ambiguousItemData.item.id, cand.sku, cand.mlb_id, cand.variation_id, cand.catalog_product_id)}
+                                            className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2 rounded-lg text-xs font-bold shadow-lg shadow-emerald-500/20 shrink-0"
                                         >
                                             Confirmar
                                         </button>
