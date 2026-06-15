@@ -360,6 +360,22 @@ def run_nfe_linker(nfe_id):
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+@api_bp.route("/nfe/<int:nfe_id>/linker/backfill-variations", methods=["POST"])
+@require_auth
+def run_nfe_backfill(nfe_id):
+    from app.services.nfe_linker_service import NfeLinkerService
+    try:
+        summary = NfeLinkerService.run_backfill(nfe_id)
+        if "error" in summary:
+            return jsonify({"success": False, "error": summary["error"]}), 404
+            
+        return jsonify({
+            "success": True,
+            "data": summary
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 @api_bp.route("/nfe/<int:nfe_id>/items/<int:item_id>/confirm", methods=["POST"])
 @require_auth
 def confirm_nfe_item_link(nfe_id, item_id):

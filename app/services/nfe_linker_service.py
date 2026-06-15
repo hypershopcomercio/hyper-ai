@@ -153,6 +153,103 @@ class NfeLinkerService:
             db.close()
 
     @staticmethod
+    def run_backfill(nfe_id: int):
+        """
+        Reprocessa itens já confirmados para preencher variation_id quando faltante.
+        """
+        db = SessionLocal()
+        try:
+            nfe = db.query(NfeImport).filter(NfeImport.id == nfe_id).first()
+            if not nfe:
+                return {"error": "NFe not found"}
+                
+            items = db.query(NfeItem).filter(
+                NfeItem.nfe_id == nfe_id, 
+                NfeItem.link_status == 'confirmed',
+                NfeItem.linked_mlb_id.isnot(None),
+                NfeItem.linked_variation_id.is_(None)
+            ).all()
+            
+            from app.models.ad_variation import AdVariation
+            
+            summary = {
+                "updated_count": 0,
+                "conflict_count": 0,
+                "skipped_count": 0,
+                "logs": []
+            }
+            
+            for item in items:
+                vars = db.query(AdVariation).filter(AdVariation.ad_id == item.linked_mlb_id).all()
+                if not vars:
+                    summary["skipped_count"] += 1
+                    continue
+                    
+                # 1. Tentar match exato por SKU
+                exact_sku_matches = [v for v in vars if v.sku and v.sku.strip().upper() == str(item.linked_sku).strip().upper()]
+                
+                if len(exact_sku_matches) == 1:
+                    item.linked_variation_id = exact_sku_matches[0].id
+                    summary["updated_count"] += 1
+                    summary["logs"].append(f"Item {item.n_item}: Vinculado à variação {item.linked_variation_id} por SKU exato.")
+                    continue
+                    
+                # 2. Heurística de tokens críticos
+                i_volts, i_watts, i_liters, i_colors = NfeLinkerService.extract_critical_tokens(item.description)
+                i_cprod = item.sku_supplier.upper() if item.sku_supplier else None
+                
+                candidates = []
+                for v in vars:
+                    score = 0
+                    v_text = ((v.attribute_combination or "") + " " + (v.sku or "")).upper()
+                    c_volts, c_watts, c_liters, c_colors = NfeLinkerService.extract_critical_tokens(v_text)
+                    
+                    matched_any = False
+                    if i_volts and i_volts & c_volts: score += 10; matched_any = True
+                    elif c_volts: score -= 20
+                    
+                    if i_watts and i_watts & c_watts: score += 10; matched_any = True
+                    elif c_watts: score -= 20
+                    
+                    if i_liters and i_liters & c_liters: score += 10; matched_any = True
+                    elif c_liters: score -= 20
+                    
+                    if i_colors and i_colors & c_colors: score += 10; matched_any = True
+                    elif c_colors: score -= 20
+                    
+                    if i_cprod and i_cprod in v_text: score += 15; matched_any = True
+                    
+                    if matched_any and score > 0:
+                        candidates.append((score, v))
+                
+                if candidates:
+                    candidates.sort(key=lambda x: x[0], reverse=True)
+                    top_score = candidates[0][0]
+                    top_matches = [c for c in candidates if c[0] == top_score]
+                    
+                    if len(top_matches) == 1:
+                        item.linked_variation_id = top_matches[0][1].id
+                        summary["updated_count"] += 1
+                        summary["logs"].append(f"Item {item.n_item}: Vinculado à variação {item.linked_variation_id} por heurística.")
+                        continue
+                
+                # Conflito ou sem match claro
+                item.link_status = 'suggested'
+                item.link_method = 'backfill_conflict'
+                item.link_confidence = 'low'
+                summary["conflict_count"] += 1
+                summary["logs"].append(f"Item {item.n_item}: Múltiplas variações ou nenhuma clara. Marcado como 'suggested' para revisão.")
+            
+            db.commit()
+            return summary
+        except Exception as e:
+            db.rollback()
+            logging.error(f"Error in run_backfill: {traceback.format_exc()}")
+            raise e
+        finally:
+            db.close()
+
+    @staticmethod
     def _generate_candidates(db: Session, nfe: NfeImport, item: NfeItem, all_ads: list, all_tiny: list, variations_by_ad: dict, ads_with_variations: set):
         candidates = []
         candidate_keys = set() # (sku, mlb_id, variation_id) to avoid duplicates
