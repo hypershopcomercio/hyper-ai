@@ -493,6 +493,8 @@ class InitialLoadService:
              "last_updated": last_updated,
              "start_time": start_time,
              "stop_time": stop_time,
+             "catalog_product_id": d.get('catalog_product_id'),
+             "catalog_listing": d.get('catalog_listing', False),
              "raw_data": d
          }
 

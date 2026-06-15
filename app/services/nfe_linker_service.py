@@ -99,11 +99,12 @@ class NfeLinkerService:
                 top_candidate = candidates[0]
                 is_ambiguous = False
                 
-                # Check for ambiguity
+                # Check for ambiguity (only if SKUs are different)
                 if len(candidates) > 1:
                     second_candidate = candidates[1]
                     if (top_candidate['score'] - second_candidate['score']) < 8:
-                        is_ambiguous = True
+                        if top_candidate.get('sku') != second_candidate.get('sku'):
+                            is_ambiguous = True
                 
                 if is_ambiguous:
                     summary["ambiguous_count"] += 1
@@ -337,11 +338,24 @@ class NfeLinkerService:
                     explanation=f"Histórico: Fornecedor {nfe.issuer_cnpj} cProd {item.sku_supplier} já vinculado ao SKU {history.linked_sku}."
                 )
 
+        # Pre-calculate Critical Tokens for NFE item
+        i_volts, i_watts, i_liters, i_colors = NfeLinkerService.extract_critical_tokens(item.description or "")
+
         # 2. EAN/GTIN Match (Score: 95)
         if item.ean and str(item.ean).strip().upper() not in ["", "SEM GTIN", "NONE"]:
             ads_by_ean = db.query(Ad).filter(Ad.gtin == item.ean).all()
             for ad in ads_by_ean:
-                expand_ad_candidates(ad, "ean_match", 95, "high", f"EAN {item.ean} bate com anúncio {ad.id}")
+                c_volts, c_watts, c_liters, c_colors = NfeLinkerService.extract_critical_tokens((ad.title or "") + " " + (ad.sku or ""))
+                
+                conflict = False
+                if i_volts and c_volts and not (i_volts & c_volts): conflict = True
+                if i_liters and c_liters and not (i_liters & c_liters): conflict = True
+                if i_colors and c_colors and not (i_colors & c_colors): conflict = True
+                
+                if conflict:
+                    expand_ad_candidates(ad, "ean_match_with_conflict", 50, "low", f"EAN bate, mas voltagem/litragem diverge.")
+                else:
+                    expand_ad_candidates(ad, "ean_match", 95, "high", f"EAN {item.ean} bate com anúncio {ad.id}")
             
             # Check TinyProduct
             tiny_by_ean = db.query(TinyProduct).filter(
@@ -459,7 +473,7 @@ class NfeLinkerService:
 
         # Tie-breaker heuristic
         if len(candidates) > 1 and item.description:
-            i_volts, i_watts, i_liters, i_colors = NfeLinkerService.extract_critical_tokens(item.description)
+            # (Removido extração duplicada pois agora é feito no topo da função)
             i_cprod = item.sku_supplier.upper() if item.sku_supplier else None
             
             for cand in candidates:

@@ -91,6 +91,10 @@ class Ad(Base):
     start_time = Column(DateTime(timezone=True))
     stop_time = Column(DateTime(timezone=True))
     raw_data = Column(JSON)     # Full payload backup
+    
+    # Tarefa 3.2: Suporte a catálogo do ML
+    catalog_product_id = Column(String(255), index=True, nullable=True)
+    catalog_listing = Column(Boolean, default=False, index=True)
 
     # Relationships
     # variations = relationship("AdVariation", back_populates="ad", cascade="all, delete-orphan")

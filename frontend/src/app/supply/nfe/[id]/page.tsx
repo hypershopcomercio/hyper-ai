@@ -435,12 +435,12 @@ export default function NFeDetailPage() {
                                             <div className="flex items-center justify-between gap-3">
                                                 <div>
                                                     <div className="flex items-center gap-1.5 text-emerald-400 text-[11px] font-bold mb-0.5">
-                                                        <CheckCircle size={12} /> Confirmado: {item.linked_sku}
+                                                        <CheckCircle size={12} /> Custo vinculado ao SKU: {item.linked_sku}
                                                     </div>
                                                     <div className="text-[10px] font-mono text-slate-500">
-                                                        MLB: {item.linked_mlb_id}
+                                                        Ref MLB: {item.linked_mlb_id}
+                                                        {item.linked_catalog_product_id && ` | Catálogo: ${item.linked_catalog_product_id}`}
                                                         {item.linked_variation_id && ` | Var: ${item.linked_variation_id}`}
-                                                        {item.linked_catalog_product_id && ` | Cat: ${item.linked_catalog_product_id}`}
                                                     </div>
                                                 </div>
                                                 <div className="flex gap-1.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -477,12 +477,12 @@ export default function NFeDetailPage() {
                                             <div className="flex items-center justify-between gap-3">
                                                 <div>
                                                     <div className="flex items-center gap-1.5 text-blue-400 text-[11px] font-bold mb-0.5">
-                                                        <Info size={12} /> Sugestão: {item.linked_sku}
+                                                        <Info size={12} /> Sugestão de SKU: {item.linked_sku}
                                                     </div>
                                                     <div className="text-[10px] font-mono text-slate-500">
-                                                        MLB: {item.linked_mlb_id}
+                                                        Ref MLB: {item.linked_mlb_id}
+                                                        {item.linked_catalog_product_id && ` | Catálogo: ${item.linked_catalog_product_id}`}
                                                         {item.linked_variation_id && ` | Var: ${item.linked_variation_id}`}
-                                                        {item.linked_catalog_product_id && ` | Cat: ${item.linked_catalog_product_id}`}
                                                     </div>
                                                 </div>
                                                 <div className="flex gap-1.5 shrink-0">
@@ -560,34 +560,55 @@ export default function NFeDetailPage() {
                                     Nenhum produto encontrado ou busque acima.
                                 </div>
                             )}
-                            <div className="space-y-2">
-                                {searchResults.map((cand: any, idx: number) => (
-                                    <div key={`${cand.mlb_id}-${cand.variation_id || idx}`} className="bg-[#1A1A24] border border-white/5 p-3 rounded-lg flex items-center justify-between hover:border-blue-500/50 transition-colors">
-                                        <div className="flex items-start gap-3">
-                                            {cand.thumbnail && <img src={cand.thumbnail} alt="" className="w-10 h-10 rounded object-cover" />}
-                                            <div>
-                                                <p className="text-sm text-slate-200 font-medium line-clamp-1">{cand.title}</p>
-                                                {cand.variation_name && <p className="text-xs text-blue-400 font-medium">Variação: {cand.variation_name}</p>}
-                                                {cand.match_reason && !cand.variation_available && <p className="text-[10px] text-amber-500 font-medium mt-0.5">{cand.match_reason}</p>}
-                                                {cand.match_reason && cand.variation_available && <p className="text-[10px] text-emerald-500 font-medium mt-0.5">{cand.match_reason}</p>}
-                                                <div className="flex items-center gap-3 mt-1 text-[11px] font-mono text-slate-400">
-                                                    <span>SKU: {cand.sku || 'N/A'}</span>
-                                                    <span>MLB: {cand.mlb_id}</span>
-                                                    {cand.variation_id && <span>VAR: {cand.variation_id}</span>}
-                                                    {cand.catalog_product_id && <span>CAT: {cand.catalog_product_id}</span>}
-                                                    <span className="text-emerald-400">{Number(cand.price).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                            
+                            {(() => {
+                                const groupedResults = searchResults.reduce((acc: any, cand: any) => {
+                                    const sku = cand.sku || 'SEM_SKU';
+                                    if (!acc[sku]) acc[sku] = [];
+                                    acc[sku].push(cand);
+                                    return acc;
+                                }, {});
+
+                                return (
+                                    <div className="space-y-4">
+                                        {Object.entries(groupedResults).map(([sku, cands]: [string, any]) => (
+                                            <div key={sku} className="bg-[#1A1A24] border border-white/5 rounded-lg overflow-hidden">
+                                                <div className="bg-blue-900/20 px-4 py-2 border-b border-blue-500/20 flex items-center justify-between">
+                                                    <span className="font-mono text-sm text-blue-300 font-bold">SKU Comercial: {sku === 'SEM_SKU' ? 'Sem SKU interno' : sku}</span>
+                                                    <span className="text-xs text-blue-400/70">{cands.length} anúncio(s) associado(s)</span>
+                                                </div>
+                                                <div className="divide-y divide-white/5">
+                                                    {cands.map((cand: any, idx: number) => (
+                                                        <div key={`${cand.mlb_id}-${cand.variation_id || idx}`} className="p-3 flex items-center justify-between hover:bg-white/[0.02] transition-colors">
+                                                            <div className="flex items-start gap-3">
+                                                                {cand.thumbnail && <img src={cand.thumbnail} alt="" className="w-10 h-10 rounded object-cover" />}
+                                                                <div>
+                                                                    <p className="text-sm text-slate-200 font-medium line-clamp-1">{cand.title}</p>
+                                                                    {cand.variation_name && <p className="text-xs text-blue-400 font-medium">Variação: {cand.variation_name}</p>}
+                                                                    {cand.match_reason && !cand.variation_available && <p className="text-[10px] text-amber-500 font-medium mt-0.5">{cand.match_reason}</p>}
+                                                                    {cand.match_reason && cand.variation_available && <p className="text-[10px] text-emerald-500 font-medium mt-0.5">{cand.match_reason}</p>}
+                                                                    <div className="flex items-center gap-3 mt-1 text-[11px] font-mono text-slate-400">
+                                                                        <span>MLB: {cand.mlb_id}</span>
+                                                                        {cand.variation_id && <span>VAR: {cand.variation_id}</span>}
+                                                                        {cand.catalog_product_id && <span>CAT: {cand.catalog_product_id}</span>}
+                                                                        <span className="text-emerald-400">{Number(cand.price).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                            <button 
+                                                                onClick={() => confirmLink(searchItem.id, cand.sku, cand.mlb_id, cand.variation_id, cand.catalog_product_id)}
+                                                                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-xs font-bold shrink-0 shadow shadow-blue-500/20"
+                                                            >
+                                                                Vincular Custo a este SKU
+                                                            </button>
+                                                        </div>
+                                                    ))}
                                                 </div>
                                             </div>
-                                        </div>
-                                        <button 
-                                            onClick={() => confirmLink(searchItem.id, cand.sku, cand.mlb_id, cand.variation_id, cand.catalog_product_id)}
-                                            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-xs font-bold shrink-0"
-                                        >
-                                            Selecionar
-                                        </button>
+                                        ))}
                                     </div>
-                                ))}
-                            </div>
+                                );
+                            })()}
                         </div>
                     </div>
                 </div>
