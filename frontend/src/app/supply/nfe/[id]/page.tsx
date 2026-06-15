@@ -568,6 +568,8 @@ export default function NFeDetailPage() {
                                             <div>
                                                 <p className="text-sm text-slate-200 font-medium line-clamp-1">{cand.title}</p>
                                                 {cand.variation_name && <p className="text-xs text-blue-400 font-medium">Variação: {cand.variation_name}</p>}
+                                                {cand.match_reason && !cand.variation_available && <p className="text-[10px] text-amber-500 font-medium mt-0.5">{cand.match_reason}</p>}
+                                                {cand.match_reason && cand.variation_available && <p className="text-[10px] text-emerald-500 font-medium mt-0.5">{cand.match_reason}</p>}
                                                 <div className="flex items-center gap-3 mt-1 text-[11px] font-mono text-slate-400">
                                                     <span>SKU: {cand.sku || 'N/A'}</span>
                                                     <span>MLB: {cand.mlb_id}</span>

@@ -555,6 +555,8 @@ def search_linker_candidates():
                     # Aplicar filtro em memória para os resultados exact match não poluírem muito,
                     # mas como limitamos no banco, podemos retornar tudo das ads envolvidas.
                     results.append({
+                        "source_type": "ad_variation",
+                        "variation_available": True,
                         "mlb_id": ad.id,
                         "variation_id": v.id,
                         "catalog_product_id": None,
@@ -563,10 +565,13 @@ def search_linker_candidates():
                         "variation_name": v.attribute_combination,
                         "price": v.price,
                         "thumbnail": ad.thumbnail,
-                        "available_quantity": v.available_quantity
+                        "available_quantity": v.available_quantity,
+                        "match_reason": "Variação (filha) vinculável encontrada."
                     })
             else:
                 results.append({
+                    "source_type": "ad",
+                    "variation_available": False,
                     "mlb_id": ad.id,
                     "variation_id": None,
                     "catalog_product_id": None,
@@ -575,7 +580,8 @@ def search_linker_candidates():
                     "variation_name": None,
                     "price": ad.price,
                     "thumbnail": ad.thumbnail,
-                    "available_quantity": ad.available_quantity
+                    "available_quantity": ad.available_quantity,
+                    "match_reason": "Anúncio pai (simples ou variações não sincronizadas)."
                 })
                 
         # Also could search TinyProduct if needed, but for now ML ads is fine.
