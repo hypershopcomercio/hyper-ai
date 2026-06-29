@@ -373,19 +373,21 @@ class PricingDataResolver:
 
     def _resolve_ipi_value(self, nf_value: float, base_cost: float, t_prof: ProductTaxProfile, latest_nfe_item: Any = None, latest_reconciliation: Any = None) -> Tuple[float, float, Dict]:
         if latest_nfe_item and latest_reconciliation:
-            multiplier = float(latest_reconciliation.financial_multiplier)
+            # IPI is the actual tax paid on the fiscal note value.
+            # financial_multiplier applies only to the base cost (meia nota),
+            # NOT to IPI — the IPI amount on the NF is what was really paid.
             qty = float(latest_nfe_item.quantity) or 1.0
-            raw_value = float(latest_nfe_item.ipi_value) / qty
-            adjusted_value = raw_value * multiplier
-            return 0.0, adjusted_value, self._build_audit_entry(
-                adjusted_value,
+            ipi_per_unit = float(latest_nfe_item.ipi_value) / qty
+            multiplier = float(latest_reconciliation.financial_multiplier)
+            return 0.0, ipi_per_unit, self._build_audit_entry(
+                ipi_per_unit,
                 "nfe_items + nfe_reconciliations",
                 "automatic",
                 "high",
-                formula=f"IPI Rateado NF-e ({raw_value}) * Multiplicador Financeiro ({multiplier})",
+                formula=f"IPI NF-e ({latest_nfe_item.ipi_value}) / qty({qty}) — sem multiplicador (imposto real pago)",
                 is_missing=False,
                 is_usable=True,
-                extra=self._build_nfe_audit_extra(latest_nfe_item, latest_reconciliation, raw_value, adjusted_value, multiplier)
+                extra=self._build_nfe_audit_extra(latest_nfe_item, latest_reconciliation, ipi_per_unit, ipi_per_unit, multiplier)
             )
 
         if not t_prof or not getattr(t_prof, 'has_ipi', False):
@@ -410,19 +412,21 @@ class PricingDataResolver:
 
     def _resolve_st_value(self, nf_value: float, ipi_value: float, base_cost: float, t_prof: ProductTaxProfile, latest_nfe_item: Any = None, latest_reconciliation: Any = None) -> Tuple[float, Dict]:
         if latest_nfe_item and latest_reconciliation:
-            multiplier = float(latest_reconciliation.financial_multiplier)
+            # ST is the actual tax paid on the fiscal note.
+            # financial_multiplier applies only to the base cost (meia nota),
+            # NOT to ST — the ST amount on the NF is what was really paid.
             qty = float(latest_nfe_item.quantity) or 1.0
-            raw_value = float(latest_nfe_item.st_value) / qty
-            adjusted_value = raw_value * multiplier
-            return adjusted_value, self._build_audit_entry(
-                adjusted_value,
+            st_per_unit = float(latest_nfe_item.st_value) / qty
+            multiplier = float(latest_reconciliation.financial_multiplier)
+            return st_per_unit, self._build_audit_entry(
+                st_per_unit,
                 "nfe_items + nfe_reconciliations",
                 "automatic",
                 "high",
-                formula=f"ST Rateado NF-e ({raw_value}) * Multiplicador Financeiro ({multiplier})",
+                formula=f"ST NF-e ({latest_nfe_item.st_value}) / qty({qty}) — sem multiplicador (imposto real pago)",
                 is_missing=False,
                 is_usable=True,
-                extra=self._build_nfe_audit_extra(latest_nfe_item, latest_reconciliation, raw_value, adjusted_value, multiplier)
+                extra=self._build_nfe_audit_extra(latest_nfe_item, latest_reconciliation, st_per_unit, st_per_unit, multiplier)
             )
 
         if not t_prof or not getattr(t_prof, 'has_st', False):
