@@ -243,7 +243,11 @@ class PricingDataResolver:
             "is_usable_for_automation": is_usable_for_automation,
             "calculator_inputs": inputs,
             "cost_candidates": cost_candidates,
-            "selected_cost_source": "product_purchase_costs" if is_override else "ads/tiny",
+            "selected_cost_source": (
+                "product_purchase_costs" if is_override
+                else "nfe_items + nfe_reconciliations" if latest_nfe_item
+                else "ads/tiny"
+            ),
             "selection_status": selection_status,
             "audit": audit,
             "missing_fields": missing_fields,

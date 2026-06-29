@@ -295,7 +295,7 @@ def resolve_pricing_data(ad_id):
     """Retorna os metadados de auditoria e os inputs calculados pelo PricingDataResolver."""
     from app.core.database import SessionLocal
     from app.services.pricing.resolver import PricingDataResolver
-    
+
     db = SessionLocal()
     try:
         resolver = PricingDataResolver(db)
@@ -305,6 +305,155 @@ def resolve_pricing_data(ad_id):
         return jsonify(result), 200
     except Exception as e:
         logger.error(f"Error resolving pricing data for {ad_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
+
+
+@api_bp.route('/pricing/simulate-resolved/<ad_id>', methods=['GET'])
+@require_auth
+def simulate_pricing_from_resolver(ad_id):
+    """
+    Simulação de precificação usando PricingDataResolver como fonte de custo.
+    Usa custo real da NF-e + conciliação financeira quando disponível.
+    100% read-only — não altera preço, ML, ou qualquer dado.
+    Query param: target_margin (float, default 20.0)
+    """
+    import math
+    from app.core.database import SessionLocal
+    from app.services.pricing.resolver import PricingDataResolver
+    from app.services.pricing.types import ProductCostInput, TaxProfileInput, MarketplaceInput
+    from app.services.pricing.core_calculator import PricingCoreCalculator
+    from app.models.ad import Ad
+    from app.models.fiscal import ProductTaxProfile, MonthlyTaxConfig
+    from dataclasses import asdict
+
+    target_margin = float(request.args.get('target_margin', 20.0))
+
+    db = SessionLocal()
+    try:
+        resolver = PricingDataResolver(db)
+        resolved = resolver.resolve(ad_id)
+
+        if "error" in resolved:
+            return jsonify(resolved), 404
+
+        ad = db.query(Ad).filter(Ad.id == ad_id).first()
+        if not ad or not ad.price or float(ad.price) <= 0:
+            return jsonify({"error": "Anúncio sem preço cadastrado"}), 400
+
+        m_config = db.query(MonthlyTaxConfig).filter(
+            MonthlyTaxConfig.is_active == True
+        ).order_by(MonthlyTaxConfig.reference_month.desc()).first()
+
+        if not m_config:
+            return jsonify({"error": "Configuração de imposto mensal não encontrada"}), 400
+
+        t_prof = db.query(ProductTaxProfile).filter(
+            ProductTaxProfile.mlb_id == ad_id,
+            ProductTaxProfile.is_active == True
+        ).first()
+
+        calc_inputs = resolved['calculator_inputs']
+        base_cost = float(calc_inputs.get('product_base_cost') or 0)
+        nf_val = float(calc_inputs.get('nf_value') or 0) or base_cost
+        ipi_rate = float(calc_inputs.get('ipi_rate') or 0)
+        extra_costs = float(calc_inputs.get('purchase_extra_costs') or 0)
+
+        product_cost = ProductCostInput(
+            real_cost=base_cost,
+            valor_nf=nf_val,
+            ipi_rate=ipi_rate,
+            difal_value=0.0,
+            other_purchase_costs=extra_costs,
+        )
+
+        has_st = t_prof.has_st if t_prof else False
+        tax_profile = TaxProfileInput(
+            full_das_rate=float(m_config.full_das_rate),
+            das_without_icms_rate=float(m_config.das_without_icms_rate),
+            has_st=has_st,
+            has_ipi=ipi_rate > 0,
+            has_difal=False,
+            mva_rate=float(t_prof.mva_rate or 0) if t_prof else 0.0,
+            origin_icms_rate=float(t_prof.origin_icms_rate or 0) if t_prof else 0.0,
+            destination_icms_rate=float(t_prof.destination_icms_rate or 0) if t_prof else 0.0,
+        )
+
+        is_premium = getattr(ad, 'listing_type_id', '') == "gold_pro"
+        current_price = float(ad.price)
+        commission_rate = 0.165 if is_premium else 0.11
+
+        marketplace = MarketplaceInput(
+            selling_price=current_price,
+            fee_rate=commission_rate * 100,
+            fixed_fee=6.0 if current_price < 79.90 else 0.0,
+            freight_cost=float(getattr(ad, 'shipping_cost', 0) or 0),
+            other_variable_costs=0.0,
+        )
+
+        calc = PricingCoreCalculator()
+        result = calc.calculate(product_cost, tax_profile, marketplace)
+
+        min_price_zero = calc.find_minimum_price_zero_profit(product_cost, tax_profile, marketplace)
+        min_price_target = (
+            calc.find_minimum_price_target_margin(product_cost, tax_profile, marketplace, target_margin)
+            if target_margin > 0 else min_price_zero
+        )
+
+        def next_price_90(min_p: float) -> float:
+            if min_p <= 0:
+                return 0.0
+            tens = math.floor(min_p / 10)
+            candidate = tens * 10 + 9.90
+            if candidate < min_p:
+                candidate += 10
+            return round(candidate, 2)
+
+        recommended_price = next_price_90(min_price_target)
+
+        return jsonify({
+            "ad_id": ad_id,
+            "mode": "simulation_only",
+            "cost_source": resolved['selected_cost_source'],
+            "data_sources": resolved['data_sources'],
+            "resolver_status": resolved['status'],
+            "is_usable_for_automation": resolved['is_usable_for_automation'],
+            "resolver_warnings": resolved['warnings'],
+            "hard_locks": resolved['hard_locks'],
+
+            "current_price": current_price,
+            "current_profit": result.profit_amount,
+            "current_margin_percent": result.contribution_margin_percent,
+
+            "minimum_price_zero_profit": min_price_zero,
+            "minimum_price_target_margin": min_price_target,
+            "target_margin_percent": target_margin,
+            "recommended_price": recommended_price,
+
+            "costs": {
+                "product_base_cost": base_cost,
+                "ipi_value": result.cost_breakdown.ipi_value,
+                "st_value": result.cost_breakdown.st_value,
+                "purchase_extra_costs": extra_costs,
+                "final_product_cost": result.cost_breakdown.final_product_cost,
+                "marketplace_commission": result.marketplace_fee_value,
+                "shipping_cost": result.freight_cost,
+                "sales_tax_value": result.sales_tax_value,
+                "total_deductions": round(
+                    result.cost_breakdown.final_product_cost
+                    + result.marketplace_fee_value
+                    + result.freight_cost
+                    + result.sales_tax_value, 2
+                ),
+            },
+
+            "resolver_audit": resolved['audit'],
+            "calculation_trace": [asdict(t) for t in result.trace],
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in simulate-resolved for {ad_id}: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
     finally:
         db.close()
