@@ -4,6 +4,7 @@ from datetime import datetime
 from app.models.ad import Ad
 from app.models.tiny_product import TinyProduct
 from app.models.fiscal import ProductPurchaseCost, ProductTaxProfile, MonthlyTaxConfig
+from app.models.nfe import NfeItem, NfeImport, NfeReconciliation
 import logging
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,24 @@ class PricingDataResolver:
             MonthlyTaxConfig.is_active == True
         ).order_by(MonthlyTaxConfig.reference_month.desc()).first()
 
+        latest_nfe_item = self.db.query(NfeItem).join(NfeImport).filter(
+            NfeItem.linked_sku == sku,
+            NfeItem.link_status == 'confirmed',
+            NfeImport.status.in_(['imported', 'linked'])
+        ).order_by(NfeImport.issue_date.desc()).first()
+        
+        latest_reconciliation = None
+        if latest_nfe_item and latest_nfe_item.nfe.reconciliations:
+            latest_reconciliation = next((r for r in latest_nfe_item.nfe.reconciliations if r.reconciliation_status == 'confirmed' and r.is_active), None)
+
+        candidate_nfe_item = None
+        if not latest_nfe_item:
+            candidate_nfe_item = self.db.query(NfeItem).join(NfeImport).filter(
+                NfeItem.linked_sku == sku,
+                NfeItem.link_status == 'suggested',
+                NfeImport.status.in_(['imported', 'linked'])
+            ).order_by(NfeImport.issue_date.desc()).first()
+
         audit = {}
         inputs = {}
         missing_fields = []
@@ -47,7 +66,7 @@ class PricingDataResolver:
         data_sources = []
 
         # Base Cost
-        base_cost_val, base_cost_audit = self._resolve_product_base_cost(ad, tiny_prod, purchase_cost_record)
+        base_cost_val, base_cost_audit = self._resolve_product_base_cost(ad, tiny_prod, purchase_cost_record, latest_nfe_item, latest_reconciliation)
         inputs['product_base_cost'] = base_cost_val
         audit['product_base_cost'] = base_cost_audit
         if base_cost_audit['is_missing']:
@@ -55,21 +74,21 @@ class PricingDataResolver:
             hard_locks.append("MISSING_BASE_COST")
 
         # NF Value
-        nf_value_val, nf_value_audit = self._resolve_nf_value(ad, tiny_prod, purchase_cost_record, base_cost_val)
+        nf_value_val, nf_value_audit = self._resolve_nf_value(ad, tiny_prod, purchase_cost_record, base_cost_val, latest_nfe_item, latest_reconciliation)
         inputs['nf_value'] = nf_value_val
         audit['nf_value'] = nf_value_audit
         if nf_value_audit['is_missing']:
             missing_fields.append("nf_value")
 
         # Fiscal Parameters (IPI, ST)
-        ipi_rate_val, ipi_val, ipi_audit = self._resolve_ipi_value(nf_value_val, base_cost_val, tax_profile_record)
+        ipi_rate_val, ipi_val, ipi_audit = self._resolve_ipi_value(nf_value_val, base_cost_val, tax_profile_record, latest_nfe_item, latest_reconciliation)
         inputs['ipi_rate'] = ipi_rate_val
         inputs['ipi_value'] = ipi_val
         audit['ipi_value'] = ipi_audit
         if ipi_audit['is_missing']:
             missing_fields.append("ipi_value")
 
-        st_val, st_audit = self._resolve_st_value(nf_value_val, ipi_val, base_cost_val, tax_profile_record)
+        st_val, st_audit = self._resolve_st_value(nf_value_val, ipi_val, base_cost_val, tax_profile_record, latest_nfe_item, latest_reconciliation)
         inputs['st_value'] = st_val
         audit['st_value'] = st_audit
         if st_audit['is_missing']:
@@ -77,7 +96,7 @@ class PricingDataResolver:
             hard_locks.append("MISSING_ST_DATA")
 
         # Extra Costs
-        extra_costs_val, extra_costs_audit = self._resolve_purchase_extra_costs(purchase_cost_record)
+        extra_costs_val, extra_costs_audit = self._resolve_purchase_extra_costs(purchase_cost_record, latest_nfe_item, latest_reconciliation)
         inputs['purchase_extra_costs'] = extra_costs_val
         audit['purchase_extra_costs'] = extra_costs_audit
 
@@ -155,6 +174,9 @@ class PricingDataResolver:
             "resolved_final_cost": final_cost
         }
         
+        if candidate_nfe_item:
+            cost_candidates['candidate_nfe_cost'] = float(candidate_nfe_item.unit_value)
+        
         comparison = {}
         status = "approved"
         selection_status = "automatic_used"
@@ -207,6 +229,12 @@ class PricingDataResolver:
         }
 
         is_usable_for_automation = status == "approved" and not hard_locks and confidence_summary['low'] == 0
+        
+        if latest_nfe_item and not latest_reconciliation:
+            is_usable_for_automation = False
+            if status == "approved":
+                status = "needs_review"
+            warnings.append("Falta conciliação financeira confirmada para a NF-e.")
 
         return {
             "status": status,
@@ -224,7 +252,7 @@ class PricingDataResolver:
             "warnings": warnings
         }
 
-    def _resolve_product_base_cost(self, ad: Ad, tiny_prod: TinyProduct, p_cost: ProductPurchaseCost) -> Tuple[float, Dict]:
+    def _resolve_product_base_cost(self, ad: Ad, tiny_prod: TinyProduct, p_cost: ProductPurchaseCost, latest_nfe_item: Any = None, latest_reconciliation: Any = None) -> Tuple[float, Dict]:
         if p_cost and getattr(p_cost, 'data_source', '') == 'manual' and p_cost.real_cost and p_cost.real_cost > 0:
             reason = getattr(p_cost, 'notes', '') or 'Sem motivo informado'
             is_test = 'teste' in reason.lower() or 'correção' in reason.lower()
@@ -242,8 +270,23 @@ class PricingDataResolver:
                     "is_active": True,
                     "validated_at": getattr(p_cost, 'updated_at', datetime.utcnow()).isoformat(),
                     "reason": reason,
-                    "warnings": ["Override manual ativo (teste/temporário)." if is_test else "Override manual ativo. Este dado sobrepõe o ERP."]
+                    "warnings": ["Override manual ativo (teste/temporário)." if is_test else "Override manual ativo. Este dado sobrepõe o ERP e a NF-e."]
                 }
+            )
+            
+        if latest_nfe_item and latest_reconciliation:
+            multiplier = float(latest_reconciliation.financial_multiplier)
+            raw_value = float(latest_nfe_item.unit_value)
+            adjusted_value = raw_value * multiplier
+            return adjusted_value, self._build_audit_entry(
+                adjusted_value,
+                "nfe_items + nfe_reconciliations",
+                "automatic",
+                "high",
+                formula=f"Valor Unitário Fiscal ({raw_value}) * Multiplicador Financeiro ({multiplier})",
+                is_missing=False,
+                is_usable=True,
+                extra=self._build_nfe_audit_extra(latest_nfe_item, latest_reconciliation, raw_value, adjusted_value, multiplier)
             )
         
         if tiny_prod and getattr(tiny_prod, 'cost', 0) and getattr(tiny_prod, 'cost', 0) > 0:
@@ -270,7 +313,7 @@ class PricingDataResolver:
 
         return 0.0, self._build_audit_entry(0.0, "none", "estimated", "low", formula="Não encontrado em nenhuma base", is_missing=True, is_usable=False)
 
-    def _resolve_nf_value(self, ad: Ad, tiny_prod: TinyProduct, p_cost: ProductPurchaseCost, base_cost: float) -> Tuple[float, Dict]:
+    def _resolve_nf_value(self, ad: Ad, tiny_prod: TinyProduct, p_cost: ProductPurchaseCost, base_cost: float, latest_nfe_item: Any = None, latest_reconciliation: Any = None) -> Tuple[float, Dict]:
         if p_cost and getattr(p_cost, 'data_source', '') == 'manual' and getattr(p_cost, 'nf_value', 0) and getattr(p_cost, 'nf_value', 0) > 0:
             reason = getattr(p_cost, 'notes', '') or ''
             is_test = 'teste' in reason.lower()
@@ -290,10 +333,41 @@ class PricingDataResolver:
                     "warnings": ["Override manual ativo para NF."]
                 }
             )
+            
+        if latest_nfe_item and latest_reconciliation:
+            multiplier = float(latest_reconciliation.financial_multiplier)
+            raw_value = float(latest_nfe_item.unit_value)
+            adjusted_value = raw_value * multiplier
+            return adjusted_value, self._build_audit_entry(
+                adjusted_value,
+                "nfe_items + nfe_reconciliations",
+                "automatic",
+                "high",
+                formula=f"Valor Unitário Fiscal NF ({raw_value}) * Multiplicador Financeiro ({multiplier})",
+                is_missing=False,
+                is_usable=True,
+                extra=self._build_nfe_audit_extra(latest_nfe_item, latest_reconciliation, raw_value, adjusted_value, multiplier)
+            )
         
         return 0.0, self._build_audit_entry(0.0, "none", "estimated", "low", formula="Valor NF não cadastrado", is_missing=True, is_usable=False)
 
-    def _resolve_ipi_value(self, nf_value: float, base_cost: float, t_prof: ProductTaxProfile) -> Tuple[float, float, Dict]:
+    def _resolve_ipi_value(self, nf_value: float, base_cost: float, t_prof: ProductTaxProfile, latest_nfe_item: Any = None, latest_reconciliation: Any = None) -> Tuple[float, float, Dict]:
+        if latest_nfe_item and latest_reconciliation:
+            multiplier = float(latest_reconciliation.financial_multiplier)
+            qty = float(latest_nfe_item.quantity) or 1.0
+            raw_value = float(latest_nfe_item.ipi_value) / qty
+            adjusted_value = raw_value * multiplier
+            return 0.0, adjusted_value, self._build_audit_entry(
+                adjusted_value,
+                "nfe_items + nfe_reconciliations",
+                "automatic",
+                "high",
+                formula=f"IPI Rateado NF-e ({raw_value}) * Multiplicador Financeiro ({multiplier})",
+                is_missing=False,
+                is_usable=True,
+                extra=self._build_nfe_audit_extra(latest_nfe_item, latest_reconciliation, raw_value, adjusted_value, multiplier)
+            )
+
         if not t_prof or not getattr(t_prof, 'has_ipi', False):
             return 0.0, 0.0, self._build_audit_entry(0.0, "product_tax_profiles", "automatic", "high", formula="IPI não exigido para este NCM", is_missing=False, is_usable=True)
             
@@ -314,7 +388,23 @@ class PricingDataResolver:
 
         return 0.0, 0.0, self._build_audit_entry(0.0, "none", "estimated", "low", formula="IPI exigido mas alíquota ausente", is_missing=True, is_usable=False)
 
-    def _resolve_st_value(self, nf_value: float, ipi_value: float, base_cost: float, t_prof: ProductTaxProfile) -> Tuple[float, Dict]:
+    def _resolve_st_value(self, nf_value: float, ipi_value: float, base_cost: float, t_prof: ProductTaxProfile, latest_nfe_item: Any = None, latest_reconciliation: Any = None) -> Tuple[float, Dict]:
+        if latest_nfe_item and latest_reconciliation:
+            multiplier = float(latest_reconciliation.financial_multiplier)
+            qty = float(latest_nfe_item.quantity) or 1.0
+            raw_value = float(latest_nfe_item.st_value) / qty
+            adjusted_value = raw_value * multiplier
+            return adjusted_value, self._build_audit_entry(
+                adjusted_value,
+                "nfe_items + nfe_reconciliations",
+                "automatic",
+                "high",
+                formula=f"ST Rateado NF-e ({raw_value}) * Multiplicador Financeiro ({multiplier})",
+                is_missing=False,
+                is_usable=True,
+                extra=self._build_nfe_audit_extra(latest_nfe_item, latest_reconciliation, raw_value, adjusted_value, multiplier)
+            )
+
         if not t_prof or not getattr(t_prof, 'has_st', False):
             return 0.0, self._build_audit_entry(0.0, "product_tax_profiles", "automatic", "high", formula="ST não exigida para este NCM", is_missing=False, is_usable=True)
             
@@ -337,7 +427,7 @@ class PricingDataResolver:
 
         return 0.0, self._build_audit_entry(0.0, "none", "estimated", "low", formula="ST exigida mas parâmetros ausentes (MVA/ICMS)", is_missing=True, is_usable=False)
 
-    def _resolve_purchase_extra_costs(self, p_cost: ProductPurchaseCost) -> Tuple[float, Dict]:
+    def _resolve_purchase_extra_costs(self, p_cost: ProductPurchaseCost, latest_nfe_item: Any = None, latest_reconciliation: Any = None) -> Tuple[float, Dict]:
         if p_cost and getattr(p_cost, 'data_source', '') == 'manual':
             val = (getattr(p_cost, 'freight_cost', 0) or 0) + \
                   (getattr(p_cost, 'packaging_cost', 0) or 0) + \
@@ -355,6 +445,23 @@ class PricingDataResolver:
                     "warnings": ["Custos extras preenchidos via override manual."]
                 }
             )
+
+        if latest_nfe_item and latest_reconciliation:
+            multiplier = float(latest_reconciliation.financial_multiplier)
+            qty = float(latest_nfe_item.quantity) or 1.0
+            raw_value = float((latest_nfe_item.freight_allocated or 0) + (latest_nfe_item.insurance_allocated or 0) + (latest_nfe_item.other_allocated or 0) - (latest_nfe_item.discount_allocated or 0)) / qty
+            adjusted_value = raw_value * multiplier
+            return adjusted_value, self._build_audit_entry(
+                adjusted_value,
+                "nfe_items + nfe_reconciliations",
+                "automatic",
+                "high",
+                formula=f"Extra Rateado NF-e ({raw_value}) * Multiplicador Financeiro ({multiplier})",
+                is_missing=False,
+                is_usable=True,
+                extra=self._build_nfe_audit_extra(latest_nfe_item, latest_reconciliation, raw_value, adjusted_value, multiplier)
+            )
+
         return 0.0, self._build_audit_entry(0.0, "none", "estimated", "high", formula="Sem custos extras registrados", is_missing=False, is_usable=True)
 
     def _resolve_marketplace_costs(self, ad: Ad) -> Tuple[Dict[str, float], Dict]:
@@ -412,6 +519,21 @@ class PricingDataResolver:
         if extra:
             entry.update(extra)
         return entry
+
+    def _build_nfe_audit_extra(self, nfe_item: Any, reconciliation: Any, raw_value: float, adjusted_value: float, multiplier: float) -> Dict[str, Any]:
+        return {
+            "raw_value": raw_value,
+            "adjusted_value": adjusted_value,
+            "multiplier": multiplier,
+            "nfe_id": nfe_item.nfe.id,
+            "nfe_number": nfe_item.nfe.nfe_number,
+            "issue_date": nfe_item.nfe.issue_date.isoformat() if getattr(nfe_item.nfe, 'issue_date', None) else None,
+            "supplier": f"{nfe_item.nfe.issuer_cnpj} / {nfe_item.nfe.issuer_name}",
+            "n_item": nfe_item.n_item,
+            "linked_sku": nfe_item.linked_sku,
+            "link_status": nfe_item.link_status,
+            "reconciliation_id": reconciliation.id if reconciliation else None,
+        }
 
     def _build_empty_response(self, error: str) -> Dict[str, Any]:
         return {
