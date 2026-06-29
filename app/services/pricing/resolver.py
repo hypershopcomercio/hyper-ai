@@ -421,21 +421,46 @@ class PricingDataResolver:
 
     def _resolve_st_value(self, nf_value: float, ipi_value: float, base_cost: float, t_prof: ProductTaxProfile, latest_nfe_item: Any = None, latest_reconciliation: Any = None) -> Tuple[float, Dict]:
         if latest_nfe_item and latest_reconciliation:
-            # ST is the actual tax paid on the fiscal note.
-            # financial_multiplier applies only to the base cost (meia nota),
-            # NOT to ST — the ST amount on the NF is what was really paid.
             qty = float(latest_nfe_item.quantity) or 1.0
             st_per_unit = float(latest_nfe_item.st_value) / qty
             multiplier = float(latest_reconciliation.financial_multiplier)
-            return st_per_unit, self._build_audit_entry(
-                st_per_unit,
-                "nfe_items + nfe_reconciliations",
-                "automatic",
-                "high",
-                formula=f"ST NF-e ({latest_nfe_item.st_value}) / qty({qty}) — sem multiplicador (imposto real pago)",
-                is_missing=False,
-                is_usable=True,
-                extra=self._build_nfe_audit_extra(latest_nfe_item, latest_reconciliation, st_per_unit, st_per_unit, multiplier)
+
+            if st_per_unit > 0:
+                # ST is explicit on the NF — use as-is (no multiplier).
+                return st_per_unit, self._build_audit_entry(
+                    st_per_unit,
+                    "nfe_items + nfe_reconciliations",
+                    "automatic",
+                    "high",
+                    formula=f"ST NF-e ({latest_nfe_item.st_value}) / qty({qty}) — imposto real pago",
+                    is_missing=False,
+                    is_usable=True,
+                    extra=self._build_nfe_audit_extra(latest_nfe_item, latest_reconciliation, st_per_unit, st_per_unit, multiplier)
+                )
+
+            # ST = 0 on NF → likely CSOSN 500 (ST pre-collected at origin).
+            # Fall back to MVA calculation using the NF unit_value as the base.
+            nf_unit_val = float(latest_nfe_item.unit_value)
+            if t_prof and getattr(t_prof, 'has_st', False) and nf_unit_val > 0 and \
+               getattr(t_prof, 'mva_rate', None) is not None and \
+               getattr(t_prof, 'origin_icms_rate', None) is not None and \
+               getattr(t_prof, 'destination_icms_rate', None) is not None:
+                base_st = (nf_unit_val + ipi_value) * (1 + (t_prof.mva_rate / 100.0))
+                st_val = max(0.0, (base_st * (t_prof.destination_icms_rate / 100.0)) - (nf_unit_val * (t_prof.origin_icms_rate / 100.0)))
+                return st_val, self._build_audit_entry(
+                    st_val,
+                    "calculated",
+                    "automatic",
+                    "medium",
+                    formula=f"ST via MVA (NF st=0, CSOSN500): Base [({nf_unit_val}+{ipi_value})×{1+(t_prof.mva_rate/100)}] × {t_prof.destination_icms_rate}% − {nf_unit_val}×{t_prof.origin_icms_rate}%",
+                    is_missing=False,
+                    is_usable=True
+                )
+
+            return 0.0, self._build_audit_entry(
+                0.0, "nfe_items", "automatic", "medium",
+                formula="ST=0 na NF-e (CSOSN 500 provável) e tax profile insuficiente para recalcular",
+                is_missing=False, is_usable=True
             )
 
         if not t_prof or not getattr(t_prof, 'has_st', False):
