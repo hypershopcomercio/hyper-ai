@@ -40,12 +40,14 @@ class PricingDataResolver:
             MonthlyTaxConfig.is_active == True
         ).order_by(MonthlyTaxConfig.reference_month.desc()).first()
 
+        VALID_NFE_STATUSES = ['imported', 'linked', 'pending_link']
+
         latest_nfe_item = self.db.query(NfeItem).join(NfeImport).filter(
             NfeItem.linked_sku == sku,
             NfeItem.link_status == 'confirmed',
-            NfeImport.status.in_(['imported', 'linked'])
+            NfeImport.status.in_(VALID_NFE_STATUSES)
         ).order_by(NfeImport.issue_date.desc()).first()
-        
+
         latest_reconciliation = None
         if latest_nfe_item and latest_nfe_item.nfe.reconciliations:
             latest_reconciliation = next((r for r in latest_nfe_item.nfe.reconciliations if r.reconciliation_status == 'confirmed' and r.is_active), None)
@@ -55,7 +57,7 @@ class PricingDataResolver:
             candidate_nfe_item = self.db.query(NfeItem).join(NfeImport).filter(
                 NfeItem.linked_sku == sku,
                 NfeItem.link_status == 'suggested',
-                NfeImport.status.in_(['imported', 'linked'])
+                NfeImport.status.in_(VALID_NFE_STATUSES)
             ).order_by(NfeImport.issue_date.desc()).first()
 
         audit = {}
