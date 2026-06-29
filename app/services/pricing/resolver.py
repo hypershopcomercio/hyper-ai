@@ -87,6 +87,15 @@ class PricingDataResolver:
         inputs['ipi_rate'] = ipi_rate_val
         inputs['ipi_value'] = ipi_val
         audit['ipi_value'] = ipi_audit
+        audit['ipi_rate'] = self._build_audit_entry(
+            ipi_rate_val,
+            ipi_audit.get('source', 'product_tax_profiles'),
+            ipi_audit.get('source_type', 'automatic'),
+            ipi_audit.get('confidence', 'high'),
+            formula=f"Taxa IPI: {ipi_rate_val}%",
+            is_missing=False,
+            is_usable=True
+        )
         if ipi_audit['is_missing']:
             missing_fields.append("ipi_value")
 
@@ -173,9 +182,14 @@ class PricingDataResolver:
         cost_candidates = {
             "tiny_ads_cost": ad_cost_tiny,
             "override_manual_base": override_cost,
-            "resolved_final_cost": final_cost
+            "resolved_final_cost": final_cost,
+            "resolved_base_cost": base_cost_val,
         }
-        
+
+        if latest_nfe_item:
+            cost_candidates['nfe_confirmed_cost'] = float(latest_nfe_item.unit_value)
+            cost_candidates['nfe_confirmed_nfe_number'] = latest_nfe_item.nfe.nfe_number if latest_nfe_item.nfe else None
+
         if candidate_nfe_item:
             cost_candidates['candidate_nfe_cost'] = float(candidate_nfe_item.unit_value)
         

@@ -179,12 +179,21 @@ export function FiscalParametersTab({ adId, pricingResolution, isResolvingPricin
                             </span>
                             <span className="text-xs font-mono text-slate-300">{formatCurrency(cost_candidates?.tiny_ads_cost || 0)}</span>
                         </div>
-                        <div className="flex justify-between items-center bg-white/[0.02] p-2 rounded">
+                        <div className={`flex justify-between items-center p-2 rounded ${cost_candidates?.nfe_confirmed_cost ? 'bg-emerald-500/5 border border-emerald-500/10' : 'bg-white/[0.02]'}`}>
                             <span className="text-xs text-slate-400 flex items-center gap-2">
-                                <span className="w-1.5 h-1.5 rounded-full bg-slate-600" />
+                                <span className={`w-1.5 h-1.5 rounded-full ${cost_candidates?.nfe_confirmed_cost ? 'bg-emerald-500' : cost_candidates?.candidate_nfe_cost ? 'bg-amber-500' : 'bg-slate-600'}`} />
                                 NF / XML (SEFAZ)
+                                {cost_candidates?.nfe_confirmed_nfe_number && (
+                                    <span className="text-[9px] text-emerald-400/70 font-mono">#{cost_candidates.nfe_confirmed_nfe_number}</span>
+                                )}
                             </span>
-                            <span className="text-[10px] text-slate-500 bg-black/30 px-1.5 py-0.5 rounded">Pendente</span>
+                            {cost_candidates?.nfe_confirmed_cost ? (
+                                <span className="text-xs font-mono text-emerald-400">{formatCurrency(cost_candidates.nfe_confirmed_cost)}</span>
+                            ) : cost_candidates?.candidate_nfe_cost ? (
+                                <span className="text-[10px] text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">Sugerida: {formatCurrency(cost_candidates.candidate_nfe_cost)}</span>
+                            ) : (
+                                <span className="text-[10px] text-slate-500 bg-black/30 px-1.5 py-0.5 rounded">Pendente</span>
+                            )}
                         </div>
                         <div className="flex justify-between items-center bg-indigo-500/5 border border-indigo-500/10 p-2 rounded">
                             <span className="text-xs text-indigo-300 flex items-center gap-2">
@@ -217,12 +226,12 @@ export function FiscalParametersTab({ adId, pricingResolution, isResolvingPricin
                     
                     <div className="space-y-1.5 font-mono text-xs">
                         <div className="flex justify-between text-slate-300 pb-2 border-b border-white/5">
-                            <span>Custo Base Resolvido</span>
-                            <span>{formatCurrency(cost_candidates?.resolved_final_cost || 0)}</span>
+                            <span>Custo Base (sem impostos compra)</span>
+                            <span>{formatCurrency(cost_candidates?.resolved_base_cost ?? audit?.product_base_cost?.value ?? 0)}</span>
                         </div>
-                        
+
                         <div className="flex justify-between text-slate-400 pt-1">
-                            <span>(+) IPI ({((audit?.ipi_rate?.value || 0) * (audit?.ipi_rate?.value < 1 ? 100 : 1)).toFixed(1)}%)</span>
+                            <span>(+) IPI ({(audit?.ipi_rate?.value || 0).toFixed(1)}%)</span>
                             <span>{formatCurrency(audit?.ipi_value?.value || 0)}</span>
                         </div>
                         <div className="flex justify-between text-slate-400">
