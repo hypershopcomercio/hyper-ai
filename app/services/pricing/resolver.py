@@ -378,13 +378,14 @@ class PricingDataResolver:
             # NOT to IPI — the IPI amount on the NF is what was really paid.
             qty = float(latest_nfe_item.quantity) or 1.0
             ipi_per_unit = float(latest_nfe_item.ipi_value) / qty
+            ipi_rate_from_nf = float(latest_nfe_item.ipi_rate) if latest_nfe_item.ipi_rate else 0.0
             multiplier = float(latest_reconciliation.financial_multiplier)
-            return 0.0, ipi_per_unit, self._build_audit_entry(
+            return ipi_rate_from_nf, ipi_per_unit, self._build_audit_entry(
                 ipi_per_unit,
                 "nfe_items + nfe_reconciliations",
                 "automatic",
                 "high",
-                formula=f"IPI NF-e ({latest_nfe_item.ipi_value}) / qty({qty}) — sem multiplicador (imposto real pago)",
+                formula=f"IPI NF-e ({latest_nfe_item.ipi_value}) / qty({qty}) — taxa {ipi_rate_from_nf}% (imposto real pago)",
                 is_missing=False,
                 is_usable=True,
                 extra=self._build_nfe_audit_extra(latest_nfe_item, latest_reconciliation, ipi_per_unit, ipi_per_unit, multiplier)
