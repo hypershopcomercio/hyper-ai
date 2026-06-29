@@ -356,16 +356,19 @@ def simulate_pricing_from_resolver(ad_id):
 
         calc_inputs = resolved['calculator_inputs']
         base_cost = float(calc_inputs.get('product_base_cost') or 0)
-        nf_val = float(calc_inputs.get('nf_value') or 0) or base_cost
-        ipi_rate = float(calc_inputs.get('ipi_rate') or 0)
+        ipi_value_resolved = float(calc_inputs.get('ipi_value') or 0)
+        st_value_resolved = float(calc_inputs.get('st_value') or 0)
         extra_costs = float(calc_inputs.get('purchase_extra_costs') or 0)
+        # Usar final_product_cost do resolver (já inclui IPI, ST, extras da NF-e)
+        # Isso evita re-calcular com alíquotas quando a fonte é NF-e (que retorna valores, não taxas)
+        full_product_cost = float(calc_inputs.get('final_product_cost') or 0) or base_cost
 
         product_cost = ProductCostInput(
-            real_cost=base_cost,
-            valor_nf=nf_val,
-            ipi_rate=ipi_rate,
+            real_cost=full_product_cost,
+            valor_nf=full_product_cost,
+            ipi_rate=0.0,          # já embutido em full_product_cost
             difal_value=0.0,
-            other_purchase_costs=extra_costs,
+            other_purchase_costs=0.0,  # já embutido em full_product_cost
         )
 
         has_st = t_prof.has_st if t_prof else False
@@ -373,7 +376,7 @@ def simulate_pricing_from_resolver(ad_id):
             full_das_rate=float(m_config.full_das_rate),
             das_without_icms_rate=float(m_config.das_without_icms_rate),
             has_st=has_st,
-            has_ipi=ipi_rate > 0,
+            has_ipi=False,         # já embutido em full_product_cost
             has_difal=False,
             mva_rate=float(t_prof.mva_rate or 0) if t_prof else 0.0,
             origin_icms_rate=float(t_prof.origin_icms_rate or 0) if t_prof else 0.0,
@@ -433,15 +436,15 @@ def simulate_pricing_from_resolver(ad_id):
 
             "costs": {
                 "product_base_cost": base_cost,
-                "ipi_value": result.cost_breakdown.ipi_value,
-                "st_value": result.cost_breakdown.st_value,
+                "ipi_value": ipi_value_resolved,
+                "st_value": st_value_resolved,
                 "purchase_extra_costs": extra_costs,
-                "final_product_cost": result.cost_breakdown.final_product_cost,
+                "final_product_cost": full_product_cost,
                 "marketplace_commission": result.marketplace_fee_value,
                 "shipping_cost": result.freight_cost,
                 "sales_tax_value": result.sales_tax_value,
                 "total_deductions": round(
-                    result.cost_breakdown.final_product_cost
+                    full_product_cost
                     + result.marketplace_fee_value
                     + result.freight_cost
                     + result.sales_tax_value, 2
