@@ -394,7 +394,16 @@ class PricingDataResolver:
             return 0.0, 0.0, self._build_audit_entry(0.0, "product_tax_profiles", "automatic", "high", formula="IPI não exigido para este NCM", is_missing=False, is_usable=True)
             
         if getattr(t_prof, 'ipi_rate', None) is not None:
-            base = nf_value if nf_value > 0 else base_cost
+            if nf_value <= 0:
+                # Without a known NF value we can't safely compute IPI from the tax profile.
+                # The base_cost from Tiny/ads likely already includes IPI+ST — applying
+                # the rate on top would double-count. Return 0 and warn.
+                return 0.0, 0.0, self._build_audit_entry(
+                    0.0, "none", "estimated", "medium",
+                    formula="IPI não calculado: Valor NF ausente. Vincule a NF-e para cálculo preciso.",
+                    is_missing=False, is_usable=True
+                )
+            base = nf_value
             rate = t_prof.ipi_rate
             val = base * (rate / 100.0)
             is_override = getattr(t_prof, 'data_source', '') == 'manual'
@@ -433,7 +442,16 @@ class PricingDataResolver:
             return 0.0, self._build_audit_entry(0.0, "product_tax_profiles", "automatic", "high", formula="ST não exigida para este NCM", is_missing=False, is_usable=True)
             
         if getattr(t_prof, 'mva_rate', None) is not None and getattr(t_prof, 'origin_icms_rate', None) is not None and getattr(t_prof, 'destination_icms_rate', None) is not None:
-            base = nf_value if nf_value > 0 else base_cost
+            if nf_value <= 0:
+                # Without a known NF value we can't safely compute ST from the tax profile.
+                # The base_cost from Tiny/ads likely already includes ST — applying
+                # MVA on top would double-count. Return 0 and warn.
+                return 0.0, self._build_audit_entry(
+                    0.0, "none", "estimated", "medium",
+                    formula="ST não calculado: Valor NF ausente. Vincule a NF-e para cálculo preciso.",
+                    is_missing=False, is_usable=True
+                )
+            base = nf_value
             base_st = (base + ipi_value) * (1 + (t_prof.mva_rate / 100.0))
             st_val = (base_st * (t_prof.destination_icms_rate / 100.0)) - (base * (t_prof.origin_icms_rate / 100.0))
             st_val = max(0, st_val)
