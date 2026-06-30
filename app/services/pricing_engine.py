@@ -450,7 +450,9 @@ class PricingEngine:
             "reversion_status": reversion_status,
             "elasticity": price_steps_data["elasticity"],
             "price_steps": price_steps_data["steps"],
-            "step_size_pct": price_steps_data.get("step_size_fixed", 0),
+            "step_mode": price_steps_data.get("step_mode", "percent"),
+            "step_value": price_steps_data.get("step_value", 0),
+            "is_low_ticket": price_steps_data.get("is_low_ticket", False),
             "estimated_days": price_steps_data["estimated_days"],
             "tooltips": {
                 "conversion": f"Taxa de conversão = (Vendas ÷ Visitas) × 100. Atual: {current_conversion:.2f}%",
