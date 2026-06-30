@@ -1,7 +1,8 @@
 """
 Hyper Pricing Job
 Executes automated pricing strategies daily at 04:00 (Brazil time) — see
-app/scheduler/jobs.py for the actual cron registration.
+run_web.py (the only scheduler that actually runs in production) for the
+cron registration.
 """
 import logging
 from datetime import datetime, timedelta

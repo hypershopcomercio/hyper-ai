@@ -8,4 +8,4 @@ Módulo de sincronização de dados para HyperShop. Integra Mercado Livre e Tiny
 2. Ative: `.\venv\Scripts\activate`
 3. Instale dependências: `pip install -r requirements.txt`
 4. Configure `.env` usando `.env.example` como base.
-5. Execute: `python main.py`
+5. Execute: `python run_web.py` (sobe a API Flask na porta 5000 + scheduler de jobs em background)

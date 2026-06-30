@@ -104,24 +104,31 @@ if __name__ == "__main__":
         # 3. Threat Score: Diariamente às 03:00 da manhã (analisa o dia anterior completo)
         scheduler.add_job(func=run_threat_score_calculation, trigger="cron", hour=3, minute=0)
         
-        # 4. Pricing Strategy Execution: Fridays at 22:00 (Brazil time)
-        from app.jobs.pricing_job import execute_pricing_strategies, retry_failed_adjustments
+        # 4. Pricing Strategy Execution: Daily at 04:00 (Brazil time) — low traffic,
+        # before business hours. Steps are sized small (R$/dia or %/dia) by
+        # pricing_engine.py specifically because this runs daily, not weekly.
+        from app.jobs.pricing_job import execute_pricing_strategies, retry_failed_adjustments, verify_recent_price_changes
         scheduler.add_job(
-            func=execute_pricing_strategies, 
-            trigger="cron", 
-            day_of_week="fri", 
-            hour=22, 
+            func=execute_pricing_strategies,
+            trigger="cron",
+            hour=4,
             minute=0,
-            id="pricing_strategy_friday"
+            id="pricing_strategy_daily"
         )
-        # Retry failed adjustments every hour on Saturdays (day after execution)
+        # Retry failed adjustments daily, 30 min after the main run
         scheduler.add_job(
             func=retry_failed_adjustments,
             trigger="cron",
-            day_of_week="sat",
-            hour="*",
+            hour=4,
             minute=30,
-            id="pricing_retry_saturday"
+            id="pricing_retry_daily"
+        )
+        # Audit: confirm logged price changes actually landed on Mercado Livre
+        scheduler.add_job(
+            func=verify_recent_price_changes,
+            trigger="cron",
+            minute='*/30',
+            id="pricing_verify_changes"
         )
         
         scheduler.start()
