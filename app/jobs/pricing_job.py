@@ -124,6 +124,7 @@ def _execute_single_strategy(db: Session, meli_api: MeliApiService, ad: Ad) -> d
     if reversion.get("triggered"):
         ad.paused_target_margin = ad.target_margin
         ad.target_margin = 0
+        db.flush()  # stage pause immediately so a later rollback in this loop doesn't undo it
         result["status"] = "reverted"
         result["message"] = f"Estratégia pausada por segurança: {reversion.get('reason')}"
         logger.warning(f"[{ad.id}] REVERSION TRIGGERED — strategy paused: {reversion.get('reason')}")
@@ -134,10 +135,13 @@ def _execute_single_strategy(db: Session, meli_api: MeliApiService, ad: Ad) -> d
     step_price = engine.get_next_step_price(ad.id, current_price, target_price)
     result["new_price"] = step_price
 
-    # Determine step number (count previous logs)
+    # Determine step number within the current campaign only.
+    # Filter by target_price == suggested_price so prior campaigns (different target)
+    # don't inflate the count.
     previous_logs = db.query(PriceAdjustmentLog).filter(
         PriceAdjustmentLog.ad_id == ad.id,
-        PriceAdjustmentLog.status == 'success'
+        PriceAdjustmentLog.status == 'success',
+        PriceAdjustmentLog.target_price == Decimal(str(round(target_price, 2)))
     ).count()
     step_number = previous_logs + 1
 
@@ -165,21 +169,22 @@ def _execute_single_strategy(db: Session, meli_api: MeliApiService, ad: Ad) -> d
     if api_result["success"]:
         # Update local ad record
         ad.price = step_price
-        
+        ad.current_step_number = (ad.current_step_number or 0) + 1
+
         # Update log
         log_entry.status = 'success'
-        
+
         result["status"] = "success"
         result["message"] = f"Price updated: {current_price:.2f} -> {step_price:.2f}"
         logger.info(f"[{ad.id}] SUCCESS: {current_price:.2f} -> {step_price:.2f}")
     else:
         log_entry.status = 'failed'
         log_entry.error_message = api_result.get("error", "Unknown error")
-        
+
         result["status"] = "failed"
         result["message"] = api_result.get("error", "Unknown error")
         logger.error(f"[{ad.id}] FAILED: {api_result.get('error')}")
-    
+
     return result
 
 
@@ -278,6 +283,12 @@ def retry_failed_adjustments():
     Retry all failed price adjustments that haven't exceeded max retries.
     Called by scheduler if there were failures.
     """
+    import os
+    write_enabled = os.getenv('ML_PRICE_WRITE_ENABLED', 'false').lower() == 'true'
+    if not write_enabled:
+        logger.warning("Retry job bloqueado: ML_PRICE_WRITE_ENABLED=false. Nenhum preço será retentado.")
+        return
+
     db = SessionLocal()
     meli_api = MeliApiService(db)
     

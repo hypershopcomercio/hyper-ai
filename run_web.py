@@ -63,8 +63,10 @@ if __name__ == "__main__":
     def meli_factory(db):
         return MeliApiService(db_session=db)
 
-    # Check if we are in the reloader process (to avoid double scheduler)
-    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    # Guard against double-init when use_reloader=True (dev), and ensure the
+    # block always runs in production where WERKZEUG_RUN_MAIN is never set.
+    if not os.environ.get("HYPER_SCHEDULER_STARTED"):
+        os.environ["HYPER_SCHEDULER_STARTED"] = "1"
         scheduler = BackgroundScheduler()
         
         # 1. Sync Jobs (Legacy Interval)

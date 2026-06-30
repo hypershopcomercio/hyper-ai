@@ -197,7 +197,12 @@ class PricingDataResolver:
         status = "approved"
         selection_status = "automatic_used"
         
-        is_override = any(m['source_type'] == 'override' for m in audit.values())
+        # Only treat as override if the cost fields themselves (not freight/extras) are overridden
+        cost_fields = {'product_base_cost', 'nf_value'}
+        is_override = any(
+            audit.get(f, {}).get('source_type') == 'override'
+            for f in cost_fields
+        )
         if is_override:
             selection_status = "override_used"
         
@@ -373,13 +378,16 @@ class PricingDataResolver:
 
     def _resolve_ipi_value(self, nf_value: float, base_cost: float, t_prof: ProductTaxProfile, latest_nfe_item: Any = None, latest_reconciliation: Any = None) -> Tuple[float, float, Dict]:
         if latest_nfe_item and latest_reconciliation:
-            # IPI is the actual tax paid on the fiscal note value.
-            # financial_multiplier applies only to the base cost (meia nota),
-            # NOT to IPI — the IPI amount on the NF is what was really paid.
+            # IPI is a tax paid only on the fiscal (NF) portion of the transaction.
+            # In a "meia nota" the NF covers half the real units; the hidden units
+            # had no IPI collected. So total IPI paid = ipi_value on the NF (no
+            # multiplier on the total). But the per-unit cost must be spread across
+            # ALL real units (qty * multiplier), not just the NF quantity.
             qty = float(latest_nfe_item.quantity) or 1.0
-            ipi_per_unit = float(latest_nfe_item.ipi_value) / qty
-            ipi_rate_from_nf = float(latest_nfe_item.ipi_rate) if latest_nfe_item.ipi_rate else 0.0
             multiplier = float(latest_reconciliation.financial_multiplier)
+            real_qty = qty * multiplier
+            ipi_per_unit = float(latest_nfe_item.ipi_value) / real_qty
+            ipi_rate_from_nf = float(latest_nfe_item.ipi_rate) if latest_nfe_item.ipi_rate else 0.0
             return ipi_rate_from_nf, ipi_per_unit, self._build_audit_entry(
                 ipi_per_unit,
                 "nfe_items + nfe_reconciliations",

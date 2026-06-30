@@ -326,7 +326,8 @@ class PricingEngine:
         current_conversion = 0.0
         has_today_data = False
         
-        if current_metric and current_metric.visits > 0:
+        MIN_VISITS_FOR_REVERSION = 10  # avoid triggering on sparse early-morning data
+        if current_metric and current_metric.visits >= MIN_VISITS_FOR_REVERSION:
             current_conversion = (current_metric.sales_qty / current_metric.visits) * 100
             has_today_data = True
 
@@ -334,7 +335,7 @@ class PricingEngine:
         if not has_today_data:
              return {
                 "triggered": False,
-                "reason": "Aguardando dados de visita de hoje",
+                "reason": f"Aguardando dados de visita de hoje (mínimo {MIN_VISITS_FOR_REVERSION} visitas)",
                 "avg_7d": round(avg_conversion_7d, 2),
                 "current": 0.0,
                 "drop_pct": 0.0
