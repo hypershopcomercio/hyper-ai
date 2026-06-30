@@ -3,11 +3,39 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.models.ml_metrics_daily import MlMetricsDaily
 from app.models.ad import Ad
+from app.models.system_config import SystemConfig
 import numpy as np
 
 class PricingEngine:
     def __init__(self, db: Session):
         self.db = db
+
+    def get_repricer_config(self) -> dict:
+        """
+        Loads repricer parameters from SystemConfig (group='repricer'), falling back
+        to the defaults declared in app.api.endpoints.settings.DEFAULT_SETTINGS.
+        This is the SINGLE source of truth for step sizing — used both by the
+        preview/simulation (this file) and by the scheduled execution job
+        (app/jobs/pricing_job.py), so the two never diverge.
+        """
+        from app.api.endpoints.settings import DEFAULT_SETTINGS
+        config = dict(DEFAULT_SETTINGS["repricer"])
+
+        rows = self.db.query(SystemConfig).filter(SystemConfig.group == "repricer").all()
+        for row in rows:
+            if row.key not in config:
+                continue
+            expected_type = type(config[row.key])
+            try:
+                if expected_type == bool:
+                    config[row.key] = row.value.lower() in ("true", "1", "yes")
+                elif expected_type == int:
+                    config[row.key] = int(float(row.value))
+                else:
+                    config[row.key] = float(row.value)
+            except (ValueError, TypeError):
+                pass
+        return config
 
     def calculate_elasticity(self, item_id: str, days: int = 30):
         """
@@ -165,58 +193,103 @@ class PricingEngine:
 
     def calculate_safe_price_steps(self, item_id: str, current_price: float, target_price: float):
         """
-        Calculates safe price adjustment steps based on product elasticity.
-        
-        - Elastic products (>1.5): small 1% steps
-        - Unitary products (0.8-1.5): medium 2% steps  
-        - Inelastic products (<0.8): larger 3% steps
-        
+        Calculates safe price adjustment steps based on ticket value and product elasticity.
+
+        - Ticket baixo (preço < low_ticket_threshold): step fixo em R$/dia
+        - Ticket alto: step em % por dia, conforme elasticidade
+            - Elástica (>1.5): step pequeno (sensível à subida)
+            - Unitária (0.8-1.5): step médio
+            - Inelástica (<0.8): step maior (resistente, pode subir mais rápido)
+        - max_step_percent é um teto de segurança absoluto, sempre respeitado.
+
+        Todos os parâmetros vêm de get_repricer_config() (configuráveis em
+        Configurações > Repricer) — esta é a ÚNICA função que decide o tamanho do
+        step, tanto para a prévia (aqui) quanto para a execução real (pricing_job.py).
+
         Returns list of price steps with dates and reasons.
         """
+        config = self.get_repricer_config()
         elasticity_data = self.calculate_elasticity(item_id)
         elasticity_score = elasticity_data.get("score")
-        
-        # FIXED STRATEGY: R$ 0.40 per day
-        step_fixed_value = 0.40
-        reason_base = "Estratégia Fixa: Aumento de R$ 0,40 por dia"
-        
+
+        is_low_ticket = current_price < config["low_ticket_threshold"]
+
+        if is_low_ticket:
+            step_mode = "fixed"
+            step_value = config["low_ticket_step_value"]
+            reason_base = f"Ticket baixo (< R$ {config['low_ticket_threshold']:.2f}): +R$ {step_value:.2f}/dia"
+        else:
+            if elasticity_score is None:
+                step_pct = config["step_pct_unitary"]
+                elasticity_label = "indefinida (sem dados suficientes)"
+            elif elasticity_score > 1.5:
+                step_pct = config["step_pct_elastic"]
+                elasticity_label = "elástica (sensível)"
+            elif elasticity_score < 0.8:
+                step_pct = config["step_pct_inelastic"]
+                elasticity_label = "inelástica (resistente)"
+            else:
+                step_pct = config["step_pct_unitary"]
+                elasticity_label = "unitária (equilibrada)"
+
+            step_pct = min(step_pct, config["max_step_percent"])
+            step_mode = "percent"
+            step_value = step_pct
+            reason_base = f"Ticket alto, elasticidade {elasticity_label}: +{step_pct:.1f}%/dia"
+
         # Calculate steps from current to target
         steps = []
         price = current_price
         step_num = 0
         base_date = datetime.utcnow().date()
-        
-        # Determine total steps needed
+
         if target_price > current_price:
-             while price < target_price and step_num < 200: # Safety break (200 steps max)
+            while price < target_price and step_num < 200:  # Safety break (200 steps max)
                 step_num += 1
-                new_price = price + step_fixed_value
-                
-                if new_price >= target_price - 0.005: 
+
+                if step_mode == "fixed":
+                    new_price = price + step_value
+                else:
+                    new_price = price * (1 + step_value / 100.0)
+
+                if new_price >= target_price - 0.005:
                     new_price = target_price
-                
-                step_date = base_date + timedelta(days=step_num * 1) # 1 day per step
-                
+
+                step_date = base_date + timedelta(days=step_num * 1)  # 1 day per step
+
                 steps.append({
                     "step": step_num,
                     "date": step_date.strftime("%Y-%m-%d"),
                     "date_display": step_date.strftime("%d/%m"),
                     "price": round(new_price, 2),
                     "increase_pct": round(((new_price - current_price) / current_price) * 100, 2),
-                    "reason": reason_base if step_num == 1 else f"Step {step_num}: +R$ {step_fixed_value:.2f}"
+                    "reason": reason_base if step_num == 1 else f"Step {step_num}"
                 })
-                
+
                 price = new_price
                 if price >= target_price:
                     break
-        
+
         return {
             "steps": steps,
-            "step_size_fixed": step_fixed_value,
+            "step_mode": step_mode,
+            "step_value": step_value,
+            "is_low_ticket": is_low_ticket,
             "elasticity": elasticity_data,
             "total_steps": len(steps),
             "estimated_days": len(steps) * 1
         }
+
+    def get_next_step_price(self, item_id: str, current_price: float, target_price: float) -> float:
+        """
+        Returns just the very next step price (today's adjustment), reusing the
+        exact same logic/config as calculate_safe_price_steps — used by the
+        scheduled execution job so preview and reality never diverge.
+        """
+        plan = self.calculate_safe_price_steps(item_id, current_price, target_price)
+        if not plan["steps"]:
+            return target_price
+        return plan["steps"][0]["price"]
 
     def check_auto_reversion_status(self, item_id: str):
         """

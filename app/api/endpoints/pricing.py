@@ -289,6 +289,49 @@ def simulate_pricing():
             "message": str(e)
         }), 500
 
+@api_bp.route('/pricing/strategy/<ad_id>', methods=['GET'])
+@require_auth
+def get_pricing_strategy(ad_id):
+    """
+    Dados operacionais do Repricer para um anúncio: elasticidade, steps calculados,
+    status de reversão automática e histórico. 100% leitura — não altera preço.
+    Os PARÂMETROS (thresholds, percentuais) são globais e ficam em
+    Configurações > Repricer (GET/PUT /settings/repricer), não aqui.
+    """
+    from app.core.database import SessionLocal
+    from app.models.ad import Ad
+    from app.services.pricing_engine import PricingEngine
+
+    db = SessionLocal()
+    try:
+        ad = db.query(Ad).filter(Ad.id == ad_id).first()
+        if not ad:
+            return jsonify({"error": "Ad not found"}), 404
+
+        current_price = float(ad.price or 0)
+        target_price = float(ad.suggested_price or current_price)
+        is_active = bool(ad.target_margin and ad.target_margin > 0)
+
+        engine = PricingEngine(db)
+        strategy_data = engine.get_strategy_data(ad_id, current_price, target_price)
+
+        return jsonify({
+            "ad_id": ad_id,
+            "is_active": is_active,
+            "is_paused": bool(getattr(ad, 'paused_target_margin', None)) and not is_active,
+            "current_price": current_price,
+            "target_price": target_price if is_active else None,
+            "target_margin": ad.target_margin,
+            "current_step_number": ad.current_step_number or 0,
+            **strategy_data
+        }), 200
+    except Exception as e:
+        logger.error(f"Error getting pricing strategy for {ad_id}: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
+
+
 @api_bp.route('/pricing/resolve/<ad_id>', methods=['GET'])
 @require_auth
 def resolve_pricing_data(ad_id):

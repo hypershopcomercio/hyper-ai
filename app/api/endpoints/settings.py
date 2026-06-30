@@ -145,6 +145,31 @@ DEFAULT_SETTINGS = {
         "alertar_imagem_pequena": True,
         "comprimir_imagem": True
     },
+    "repricer": {
+        # Master toggle do MOTOR de cálculo (NÃO confundir com ML_PRICE_WRITE_ENABLED,
+        # que é a trava de escrita real no Mercado Livre e só pode ser alterada via env var)
+        "enabled": True,
+
+        # Classificação de ticket médio
+        "low_ticket_threshold": 100.0,   # R$ — abaixo disso é "ticket baixo"
+
+        # Ticket baixo: step fixo em R$ por dia
+        "low_ticket_step_value": 0.40,
+
+        # Ticket alto: step em % por dia, conforme elasticidade do produto
+        "step_pct_elastic": 1.0,     # elasticidade > 1.5 (sensível) — sobe devagar
+        "step_pct_unitary": 2.0,     # elasticidade 0.8–1.5 (equilibrada)
+        "step_pct_inelastic": 3.0,   # elasticidade < 0.8 (resistente) — pode subir mais rápido
+
+        # Teto de segurança absoluto — nenhum step ultrapassa isso, mesmo que a regra acima sugira mais
+        "max_step_percent": 5.0,
+
+        # Reversão automática de segurança
+        "reversion_drop_pct": 15.0,      # % de queda na conversão (vs média da janela) que aciona a reversão
+        "reversion_window_days": 7,      # janela de comparação (dias)
+
+        "min_days_between_steps": 1
+    },
     "integracoes": {
         "ml_sync_estoque": True,
         "ml_sync_precos": True,

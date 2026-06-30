@@ -1,6 +1,7 @@
 """
 Hyper Pricing Job
-Executes automated pricing strategies on Fridays at 22h (Brazil time).
+Executes automated pricing strategies daily at 04:00 (Brazil time) — see
+app/scheduler/jobs.py for the actual cron registration.
 """
 import logging
 from datetime import datetime, timedelta
@@ -10,11 +11,11 @@ from app.core.database import SessionLocal
 from app.models.ad import Ad
 from app.models.pricing_log import PriceAdjustmentLog
 from app.services.meli_api import MeliApiService
+from app.services.pricing_engine import PricingEngine
 
 logger = logging.getLogger(__name__)
 
 # Constants
-MAX_STEP_PERCENT = 5.0  # Maximum price change per step (5%)
 MAX_RETRIES = 3
 
 
@@ -106,27 +107,41 @@ def _execute_single_strategy(db: Session, meli_api: MeliApiService, ad: Ad) -> d
     
     current_price = float(ad.price or 0)
     target_price = float(ad.suggested_price or 0)
-    
+
     # Skip if no meaningful difference
     if abs(current_price - target_price) < 0.01:
         result["status"] = "skipped"
         result["message"] = "Already at target price"
         logger.info(f"[{ad.id}] Skipped - already at target price")
         return result
-    
-    # Calculate the step price
-    step_price = _calculate_step_price(current_price, target_price)
+
+    # SAFETY GUARD: if conversion dropped vs the recent average, do NOT keep raising
+    # the price. Pause the strategy instead (hold at current step, don't auto-lower —
+    # an automatic price cut is a bigger commercial decision than holding).
+    engine = PricingEngine(db)
+    reversion = engine.check_auto_reversion_status(ad.id)
+    if reversion.get("triggered"):
+        ad.paused_target_margin = ad.target_margin
+        ad.target_margin = 0
+        result["status"] = "reverted"
+        result["message"] = f"Estratégia pausada por segurança: {reversion.get('reason')}"
+        logger.warning(f"[{ad.id}] REVERSION TRIGGERED — strategy paused: {reversion.get('reason')}")
+        return result
+
+    # Calculate the step price — SAME engine/config used by the preview, so what
+    # the user sees in the Repricer tab is exactly what gets executed.
+    step_price = engine.get_next_step_price(ad.id, current_price, target_price)
     result["new_price"] = step_price
-    
+
     # Determine step number (count previous logs)
     previous_logs = db.query(PriceAdjustmentLog).filter(
         PriceAdjustmentLog.ad_id == ad.id,
         PriceAdjustmentLog.status == 'success'
     ).count()
     step_number = previous_logs + 1
-    
+
     # Calculate total steps needed
-    total_steps = _calculate_total_steps(current_price, target_price)
+    total_steps = engine.calculate_safe_price_steps(ad.id, current_price, target_price)["total_steps"]
     
     # Create log entry before execution
     log_entry = PriceAdjustmentLog(
@@ -167,47 +182,6 @@ def _execute_single_strategy(db: Session, meli_api: MeliApiService, ad: Ad) -> d
     return result
 
 
-def _calculate_step_price(current_price: float, target_price: float) -> float:
-    """
-    Calculate the next step price, respecting max 5% change per step
-    and distributing evenly across remaining steps.
-    """
-    if current_price <= 0:
-        return target_price
-    
-    # Calculate total change percentage
-    total_change_percent = ((target_price / current_price) - 1) * 100
-    
-    # If change is tiny, just go to target
-    if abs(total_change_percent) < 1:
-        return target_price
-    
-    # Number of steps needed
-    num_steps = max(1, int(abs(total_change_percent) / MAX_STEP_PERCENT) + (1 if abs(total_change_percent) % MAX_STEP_PERCENT > 0.5 else 0))
-    
-    # Even distribution per step
-    step_percent = total_change_percent / num_steps
-    
-    # Calculate new price
-    new_price = current_price * (1 + step_percent / 100)
-    
-    # Round to 2 decimal places
-    return round(new_price, 2)
-
-
-def _calculate_total_steps(current_price: float, target_price: float) -> int:
-    """Calculate total number of steps needed."""
-    if current_price <= 0:
-        return 1
-    
-    total_change_percent = ((target_price / current_price) - 1) * 100
-    
-    if abs(total_change_percent) < 1:
-        return 1
-    
-    return max(1, int(abs(total_change_percent) / MAX_STEP_PERCENT) + (1 if abs(total_change_percent) % MAX_STEP_PERCENT > 0.5 else 0))
-
-
 def execute_single_ad_step(ad_id: str, target_price: float = None) -> dict:
     """
     Manual execution for a single ad. Used by the UI "jump to step" button.
@@ -238,10 +212,10 @@ def execute_single_ad_step(ad_id: str, target_price: float = None) -> dict:
         if target_price:
             step_price = round(float(target_price), 2)  # Ensure 2 decimal places
         else:
-            # Calculate next step
+            # Calculate next step using the same engine/config as the preview
             current_price = float(ad.price or 0)
             final_target = float(ad.suggested_price or current_price)
-            step_price = _calculate_step_price(current_price, final_target)
+            step_price = PricingEngine(db).get_next_step_price(ad_id, current_price, final_target)
         
         # CRITICAL: ML API requires exactly 2 decimal places for BRL
         step_price = round(step_price, 2)

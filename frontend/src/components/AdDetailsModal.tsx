@@ -12,6 +12,7 @@ import { Tooltip } from "@/components/ui/Tooltip";
 import { PromoSelector } from './PromoSelector';
 import { MarginSimulator } from './MarginSimulator';
 import { FiscalParametersTab } from './FiscalParametersTab';
+import { RepricerTab } from './RepricerTab';
 import { AdMediaTab } from './AdMediaTab';
 
 
@@ -26,7 +27,7 @@ interface Props {
 export function AdDetailsModal({ adId, onClose }: Props) {
     const [ad, setAd] = useState<Ad | null>(null);
     const [loading, setLoading] = useState(true);
-    const [activeTab, setActiveTab] = useState<'overview' | 'performance' | 'health' | 'competition' | 'margin' | 'fiscal' | 'media'>('overview');
+    const [activeTab, setActiveTab] = useState<'overview' | 'performance' | 'health' | 'competition' | 'margin' | 'fiscal' | 'repricer' | 'media'>('overview');
     const [activeImageIndex, setActiveImageIndex] = useState(0);
     const [isLightboxOpen, setIsLightboxOpen] = useState(false);
     const [confirmAction, setConfirmAction] = useState<{
@@ -634,6 +635,13 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                 <Building2 className="w-4 h-4" />
                                                 Ficha Fiscal
                                             </div>
+                                            <div
+                                                onClick={() => setActiveTab('repricer')}
+                                                className={`px-4 py-2 rounded-lg text-xs font-bold uppercase transition-colors flex items-center gap-2 cursor-pointer ${activeTab === 'repricer' ? 'bg-emerald-500/20 text-emerald-400' : 'text-slate-500 hover:text-emerald-400'}`}
+                                            >
+                                                <TrendingUp className="w-4 h-4" />
+                                                Repricer
+                                            </div>
                                         </div>
 
                                         <div className="p-6">
@@ -1215,6 +1223,10 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                         }}
                                                     />
                                                 </div>
+                                            )}
+
+                                            {activeTab === 'repricer' && (
+                                                <RepricerTab adId={ad.id} />
                                             )}
 
                                             {activeTab === 'margin' && (

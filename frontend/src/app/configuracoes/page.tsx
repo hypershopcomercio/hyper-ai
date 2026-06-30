@@ -2,10 +2,10 @@
 
 import { useState, useEffect } from 'react';
 import { api } from '@/lib/api';
-import { Settings, DollarSign, Package, Brain, Link2, Building2, Tag, Users, FileText, Save, RefreshCw, Check } from 'lucide-react';
+import { Settings, DollarSign, Package, Brain, Link2, Building2, Tag, Users, FileText, Save, RefreshCw, Check, TrendingUp } from 'lucide-react';
 import { PremiumLoader } from '@/components/ui/PremiumLoader';
 
-type SettingsTab = 'financeiro' | 'estoque' | 'hyper_ai' | 'integracoes' | 'geral';
+type SettingsTab = 'financeiro' | 'estoque' | 'hyper_ai' | 'repricer' | 'integracoes' | 'geral';
 
 interface SettingsData {
     [key: string]: any;
@@ -23,6 +23,7 @@ export default function ConfiguracoesPage() {
         { key: 'financeiro' as SettingsTab, label: 'Financeiro', icon: DollarSign, priority: 'Alta' },
         { key: 'estoque' as SettingsTab, label: 'Estoque', icon: Package, priority: 'Média' },
         { key: 'hyper_ai' as SettingsTab, label: 'Hyper AI', icon: Brain, priority: 'Média' },
+        { key: 'repricer' as SettingsTab, label: 'Repricer', icon: TrendingUp, priority: 'Alta' },
         { key: 'integracoes' as SettingsTab, label: 'Integrações', icon: Link2, priority: 'Alta' },
         { key: 'geral' as SettingsTab, label: 'Geral', icon: Building2, priority: 'Baixa' },
     ];
@@ -357,6 +358,80 @@ export default function ConfiguracoesPage() {
         );
     };
 
+    const renderRepricer = () => {
+        const data = settings.repricer || {};
+        return (
+            <div className="space-y-6">
+                <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 text-sm text-amber-300">
+                    <strong>ATENÇÃO — leia esta parte:</strong> estes parâmetros controlam o ritmo automático de
+                    subida de preço para TODOS os produtos. A escrita real no Mercado Livre só acontece se
+                    <code className="mx-1 px-1.5 py-0.5 bg-black/30 rounded">ML_PRICE_WRITE_ENABLED=true</code>
+                    no servidor (hoje desligado — modo simulação). Mudar estes valores não move preços sozinho.
+                </div>
+
+                <div className="bg-[#12121a] rounded-xl border border-slate-800/50 p-6">
+                    <h3 className="text-lg font-semibold text-white mb-4">Motor de Subida Gradual</h3>
+                    <div className="grid gap-4">
+                        <div className="flex items-center gap-3">
+                            {renderInput('enabled', data.enabled, 'checkbox')}
+                            <label className="text-slate-300">Motor de repricer habilitado (calcula estratégias)</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="bg-[#12121a] rounded-xl border border-slate-800/50 p-6">
+                    <h3 className="text-lg font-semibold text-white mb-4">Ticket Baixo (step fixo em R$)</h3>
+                    <div className="grid gap-4">
+                        <div className="flex items-center justify-between">
+                            <label className="text-slate-300">Limite de ticket baixo (R$)</label>
+                            {renderInput('low_ticket_threshold', data.low_ticket_threshold, 'number')}
+                        </div>
+                        <div className="flex items-center justify-between">
+                            <label className="text-slate-300">Step diário para ticket baixo (R$)</label>
+                            {renderInput('low_ticket_step_value', data.low_ticket_step_value, 'number')}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="bg-[#12121a] rounded-xl border border-slate-800/50 p-6">
+                    <h3 className="text-lg font-semibold text-white mb-4">Ticket Alto (step em % por elasticidade)</h3>
+                    <div className="grid gap-4">
+                        <div className="flex items-center justify-between">
+                            <label className="text-slate-300">Elástica — sensível (%/dia)</label>
+                            {renderInput('step_pct_elastic', data.step_pct_elastic, 'number')}
+                        </div>
+                        <div className="flex items-center justify-between">
+                            <label className="text-slate-300">Unitária — equilibrada (%/dia)</label>
+                            {renderInput('step_pct_unitary', data.step_pct_unitary, 'number')}
+                        </div>
+                        <div className="flex items-center justify-between">
+                            <label className="text-slate-300">Inelástica — resistente (%/dia)</label>
+                            {renderInput('step_pct_inelastic', data.step_pct_inelastic, 'number')}
+                        </div>
+                        <div className="flex items-center justify-between">
+                            <label className="text-slate-300">Teto de segurança absoluto (%/dia)</label>
+                            {renderInput('max_step_percent', data.max_step_percent, 'number')}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="bg-[#12121a] rounded-xl border border-slate-800/50 p-6">
+                    <h3 className="text-lg font-semibold text-white mb-4">Reversão Automática de Segurança</h3>
+                    <div className="grid gap-4">
+                        <div className="flex items-center justify-between">
+                            <label className="text-slate-300">Queda de conversão que aciona pausa (%)</label>
+                            {renderInput('reversion_drop_pct', data.reversion_drop_pct, 'number')}
+                        </div>
+                        <div className="flex items-center justify-between">
+                            <label className="text-slate-300">Janela de comparação (dias)</label>
+                            {renderInput('reversion_window_days', data.reversion_window_days, 'number')}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     const renderIntegracoes = () => {
         const data = settings.integracoes || {};
         return (
@@ -548,6 +623,7 @@ export default function ConfiguracoesPage() {
                         {activeTab === 'financeiro' && renderFinanceiro()}
                         {activeTab === 'estoque' && renderEstoque()}
                         {activeTab === 'hyper_ai' && renderHyperAI()}
+                        {activeTab === 'repricer' && renderRepricer()}
                         {activeTab === 'integracoes' && renderIntegracoes()}
                         {activeTab === 'geral' && renderGeral()}
                     </div>
