@@ -176,8 +176,8 @@ class PricingDataResolver:
             audit['final_profit'] = self._build_audit_entry(0.0, "none", "estimated", "low", formula="Faltam dados base para cálculo do lucro", is_missing=True, is_usable=False)
 
         # Cost Candidates & Comparison
-        ad_cost_tiny = getattr(ad, 'cost', 0.0)
-        override_cost = purchase_cost_record.real_cost if purchase_cost_record and getattr(purchase_cost_record, 'data_source', '') == 'manual' else 0.0
+        ad_cost_tiny = float(ad.cost or 0)
+        override_cost = float(purchase_cost_record.real_cost or 0) if purchase_cost_record and getattr(purchase_cost_record, 'data_source', '') == 'manual' else 0.0
         
         cost_candidates = {
             "tiny_ads_cost": ad_cost_tiny,
@@ -383,10 +383,10 @@ class PricingDataResolver:
             # had no IPI collected. So total IPI paid = ipi_value on the NF (no
             # multiplier on the total). But the per-unit cost must be spread across
             # ALL real units (qty * multiplier), not just the NF quantity.
-            qty = float(latest_nfe_item.quantity) or 1.0
-            multiplier = float(latest_reconciliation.financial_multiplier)
-            real_qty = qty * multiplier
-            ipi_per_unit = float(latest_nfe_item.ipi_value) / real_qty
+            qty = float(latest_nfe_item.quantity or 1)
+            multiplier = float(latest_reconciliation.financial_multiplier or 1)
+            real_qty = qty * multiplier or 1.0
+            ipi_per_unit = float(latest_nfe_item.ipi_value or 0) / real_qty
             ipi_rate_from_nf = float(latest_nfe_item.ipi_rate) if latest_nfe_item.ipi_rate else 0.0
             return ipi_rate_from_nf, ipi_per_unit, self._build_audit_entry(
                 ipi_per_unit,
@@ -430,8 +430,8 @@ class PricingDataResolver:
 
     def _resolve_st_value(self, nf_value: float, ipi_value: float, base_cost: float, t_prof: ProductTaxProfile, latest_nfe_item: Any = None, latest_reconciliation: Any = None) -> Tuple[float, Dict]:
         if latest_nfe_item and latest_reconciliation:
-            qty = float(latest_nfe_item.quantity) or 1.0
-            st_per_unit = float(latest_nfe_item.st_value) / qty
+            qty = float(latest_nfe_item.quantity or 1)
+            st_per_unit = float(latest_nfe_item.st_value or 0) / qty
             multiplier = float(latest_reconciliation.financial_multiplier)
 
             if st_per_unit > 0:

@@ -375,27 +375,31 @@ class PricingEngine:
         if not ad or not ad.price or ad.price <= 0:
             return 0.0
 
-        # Calculate Current State
-        # We use stored margin_value if trusted, or recalculate to be safe/consistent
-        # Cost + Ship + Fixed
-        cost_product = ad.cost or 0.0
-        cost_shipping = ad.shipping_cost or 0.0
-        
+        # All Ad columns here are Numeric/Decimal in the DB; cast to float up front
+        # so they can mix freely with the float current_price/new_price args below.
+        ad_price = float(ad.price)
+        cost_product = float(ad.cost or 0.0)
+        cost_shipping = float(ad.shipping_cost or 0.0)
+        tax_cost = float(ad.tax_cost or 0.0)
+        commission_percent = float(ad.commission_percent or 0.0)
+        commission_cost = float(ad.commission_cost or 0.0)
+        margin_value = float(ad.margin_value) if ad.margin_value is not None else None
+
         # Rates
         tax_rate = 0.0
-        if ad.tax_cost and ad.price > 0:
-            tax_rate = ad.tax_cost / ad.price
-            
+        if tax_cost and ad_price > 0:
+            tax_rate = tax_cost / ad_price
+
         comm_rate = 0.0
-        if ad.commission_percent:
-            comm_rate = ad.commission_percent
-        elif ad.commission_cost and ad.price > 0:
-            comm_rate = ad.commission_cost / ad.price
-            
+        if commission_percent:
+            comm_rate = commission_percent
+        elif commission_cost and ad_price > 0:
+            comm_rate = commission_cost / ad_price
+
         # Current Margin Value
-        current_margin_value = ad.margin_value
+        current_margin_value = margin_value
         if current_margin_value is None:
-             current_margin_value = ad.price - (ad.price * comm_rate) - (ad.price * tax_rate) - cost_shipping - cost_product
+             current_margin_value = ad_price - (ad_price * comm_rate) - (ad_price * tax_rate) - cost_shipping - cost_product
 
         # Current Conversion
         current_conversion = 0.0
