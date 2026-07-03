@@ -37,6 +37,7 @@ def main():
         today = datetime.datetime.now().date()
 
         total_inserted = 0
+        consecutive_empty = 0
         for offset in range(days, -1, -1):  # do mais antigo ao mais recente
             day = today - datetime.timedelta(days=offset)
 
@@ -48,9 +49,21 @@ def main():
 
             rows = meli.get_ads_performance_daily(day)
             if not rows:
+                consecutive_empty += 1
                 print(f"{day}: sem dados retornados.")
+                # Fail-fast: se NADA foi inserido ainda e 5 dias seguidos vieram
+                # vazios, provavelmente e' erro de autorizacao (401), nao ausencia
+                # de campanhas. Aborta para nao gastar 60 dias em retries.
+                if total_inserted == 0 and consecutive_empty >= 5:
+                    print("\nABORTADO: 5 dias seguidos sem dados e nenhum registro inserido.")
+                    print("Provavel problema de autorizacao na API de Ads (veja os logs acima).")
+                    print("Verifique: 1) header Api-Version esta no codigo (git pull);")
+                    print("2) o app no DevCenter do ML tem permissao de Advertising;")
+                    print("3) teste manual com curl (fornecido pelo assistente).")
+                    return
                 time.sleep(2)
                 continue
+            consecutive_empty = 0
 
             db.query(MlAdsItemDaily).filter(MlAdsItemDaily.date == day).delete()
             inserted = 0

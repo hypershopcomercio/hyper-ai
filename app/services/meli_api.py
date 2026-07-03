@@ -87,20 +87,27 @@ class MeliApiService:
     def get_headers(self):
         return {"Authorization": f"Bearer {self.access_token}"}
 
-    def request(self, method: str, endpoint: str, params: dict = None, json_data: dict = None, timeout: int = 30, max_retries: int = 3):
+    def request(self, method: str, endpoint: str, params: dict = None, json_data: dict = None, timeout: int = 30, max_retries: int = 3, extra_headers: dict = None):
         """
         Generic request method with automatic token refresh and 429 (Rate Limit) retry.
         Endpoint should be relative, e.g. '/orders/search'
+        extra_headers: merged over the auth header (e.g. Api-Version for /advertising/*)
         """
         import time
         url = f"{self.base_url}{endpoint}"
-        
+
+        def build_headers():
+            h = self.get_headers()
+            if extra_headers:
+                h.update(extra_headers)
+            return h
+
         retry_delay = 10 # seconds
-        
+
         for attempt in range(max_retries + 1):
             try:
                 # Use provided timeout
-                resp = requests.request(method, url, headers=self.get_headers(), params=params, json=json_data, timeout=timeout)
+                resp = requests.request(method, url, headers=build_headers(), params=params, json=json_data, timeout=timeout)
                 
                 # Handle Rate Limit (429)
                 if resp.status_code == 429:
@@ -130,7 +137,7 @@ class MeliApiService:
                             # Special case: allow ONE more attempt after refresh even if max_retries is 0
                             if attempt >= max_retries:
                                 logger.info(f"Retrying {endpoint} once more after token refresh (fast mode override).")
-                                resp = requests.request(method, url, headers=self.get_headers(), params=params, json=json_data, timeout=timeout)
+                                resp = requests.request(method, url, headers=build_headers(), params=params, json=json_data, timeout=timeout)
                                 return resp
                             continue
                         else:
@@ -319,7 +326,8 @@ class MeliApiService:
                 logger.warning("get_advertiser_id: Fast mode enabled and no cache/token found. Skipping API call.")
                 return None
 
-            response = self.request('GET', "/advertising/advertisers", params={"product_id": "PADS"})
+            response = self.request('GET', "/advertising/advertisers", params={"product_id": "PADS"},
+                                    extra_headers={"Api-Version": "1"})
             if response and response.status_code == 200:
                 advertisers = response.json().get("advertisers", [])
                 if advertisers:
@@ -369,7 +377,8 @@ class MeliApiService:
         try:
             while True:
                 params["offset"] = offset
-                response = self.request('GET', endpoint, params=params, timeout=request_timeout, max_retries=request_retries)
+                response = self.request('GET', endpoint, params=params, timeout=request_timeout,
+                                        max_retries=request_retries, extra_headers={"Api-Version": "2"})
                 if not response or response.status_code != 200: break
                 
                 data = response.json()
@@ -426,7 +435,8 @@ class MeliApiService:
             all_results = []
             failed = False
             while True:
-                response = self.request('GET', endpoint, params=params, timeout=30, max_retries=3)
+                response = self.request('GET', endpoint, params=params, timeout=30, max_retries=3,
+                                        extra_headers={"Api-Version": "2"})
                 if not response or response.status_code != 200:
                     failed = True
                     break
