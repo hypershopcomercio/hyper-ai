@@ -15,6 +15,11 @@ def run_daily_sync():
     # Added via user request to avoid API latency during dashboard load
     if hasattr(engine, 'sync_ads_metrics'):
         engine.sync_ads_metrics()
+
+    # 2b. Sync REAL per-item daily Ads metrics (ml_ads_item_daily)
+    # Source of truth for per-sale Ads attribution
+    if hasattr(engine, 'sync_ads_item_daily'):
+        engine.sync_ads_item_daily(days_back=3)
         
     # 3. Sync Metrics (Visits, Sales, Conversion)
     engine.sync_metrics()

@@ -398,6 +398,66 @@ class MeliApiService:
             logger.error(f"Error fetching ads performance: {e}")
             return []
 
+    # Metrics set for per-day persistence. units_quantity = units sold attributed
+    # to Ads (direct + indirect). Some accounts/API versions reject the extended
+    # set, so callers fall back to the base set on non-200.
+    ADS_METRICS_BASE = "clicks,prints,cost,cpc,acos,roas,amount"
+    ADS_METRICS_EXTENDED = ADS_METRICS_BASE + ",units_quantity,direct_units_quantity,indirect_units_quantity"
+
+    def get_ads_performance_daily(self, day) -> list[dict]:
+        """
+        Fetches Product Ads per-item metrics for a SINGLE day (date_from == date_to),
+        giving real daily granularity for persistence in ml_ads_item_daily.
+        Returns [] on any failure (caller decides whether to retry the day later).
+        """
+        advertiser_id = self.get_advertiser_id()
+        if not advertiser_id:
+            return []
+
+        endpoint = f"/advertising/MLB/advertisers/{advertiser_id}/product_ads/ads/search"
+        d_str = day.strftime("%Y-%m-%d") if hasattr(day, 'strftime') else str(day)
+
+        for metrics in (self.ADS_METRICS_EXTENDED, self.ADS_METRICS_BASE):
+            params = {
+                "date_from": d_str, "date_to": d_str,
+                "metrics": metrics,
+                "limit": 100, "offset": 0
+            }
+            all_results = []
+            failed = False
+            while True:
+                response = self.request('GET', endpoint, params=params, timeout=30, max_retries=3)
+                if not response or response.status_code != 200:
+                    failed = True
+                    break
+                data = response.json()
+                results = data.get("results", [])
+                all_results.extend(results)
+                paging = data.get("paging", {})
+                if len(all_results) >= paging.get("total", 0) or not results:
+                    break
+                params["offset"] += len(results)
+                if params["offset"] > 2000:
+                    break
+
+            if failed and not all_results:
+                # Extended metric set may be unsupported — retry with base set
+                continue
+
+            rows = []
+            for ad in all_results:
+                m = ad.get("metrics", {}) or {}
+                rows.append({
+                    "item_id": ad.get("item_id"),
+                    "cost": float(m.get("cost", 0) or 0),
+                    "amount": float(m.get("amount", 0) or 0),
+                    "clicks": int(m.get("clicks", 0) or 0),
+                    "prints": int(m.get("prints", 0) or 0),
+                    "units_quantity": int(m.get("units_quantity", 0) or 0),
+                })
+            return rows
+        return []
+
     def get_shipping_cost(self, item_id: str, seller_id: str):
         """
         Fetches free shipping cost for the seller.

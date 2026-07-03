@@ -457,40 +457,65 @@ def get_dashboard_metrics():
         sales_count_cancelled = 0
         
         # Pre-calc item sold quantities for Ads attribution
+        # item_sold_qty_map: total per item in period; item_day_sold_qty: per item per BR-day
         item_sold_qty_map = {}
+        item_day_sold_qty = {}
         all_item_ids = set()
         for o in curr_orders:
             if o.status != 'cancelled':
+                 sale_day_br = (o.date_created - timedelta(hours=3)).date() if o.date_created else None
                  for i in o.items:
                      # Store qty
                      item_sold_qty_map[i.ml_item_id] = item_sold_qty_map.get(i.ml_item_id, 0) + i.quantity
+                     if sale_day_br:
+                         dk = (i.ml_item_id, sale_day_br)
+                         item_day_sold_qty[dk] = item_day_sold_qty.get(dk, 0) + i.quantity
                      all_item_ids.add(i.ml_item_id)
-        
-        # Calculate Ads Cost Per Unit (Spend / Total Sold Qty)
-        # This distributes ad spend across all units sold in the period
-        # Prepare Ads Metrics
-        ads_cost_per_unit_map = {}
+
+        # === Ads attribution: DB-first (ml_ads_item_daily), live API as fallback ===
+        # Attributed cost per sale = item cost ON THE SALE DAY / units sold that day,
+        # with residual (no-sale days) spread over the period. See AdsAttributionService.
+        ads_cost_per_unit_map = {}   # legacy fallback map (period-level per-unit)
+        ads_daily_attr = None        # DB-backed attribution maps
+        ads_orphan_cost = 0.0        # spend on items with ZERO sales in period
         revenue_ads = 0.0
         ads_cost_7d = 0.0
-        
-        # Only fetch ads for items we sold
-        if all_item_ids:
+        ads_source = "none"
+
+        try:
+            from app.services.ads_attribution import AdsAttributionService
+            attr_svc = AdsAttributionService(db)
+            ads_daily_attr = attr_svc.build(
+                start_date_br.date(),
+                end_date_br.date(),
+                item_day_sold_qty,
+                item_sold_qty_map
+            )
+            if ads_daily_attr:
+                revenue_ads = ads_daily_attr["total_ads_revenue"]
+                ads_cost_7d = ads_daily_attr["total_cost"]
+                ads_orphan_cost = ads_daily_attr["orphan_cost"]
+                ads_source = "db"
+        except Exception as e:
+            print(f"[ERROR] Ads DB Attribution CRASHED: {e}")
+            ads_daily_attr = None
+
+        # Fallback: live API (legacy behavior) when ml_ads_item_daily has no data for the period
+        if ads_daily_attr is None and all_item_ids:
             try:
-                # Fetch Ad metrics for these items in the period
                 meli_service = MeliApiService(db)
                 d_from = start_date_br.strftime('%Y-%m-%d')
                 d_to = end_date_br.strftime('%Y-%m-%d')
-                
-                # Fetch for all items to be safe/complete
+
                 cache_key = f"ads_cache_{d_from}_{d_to}"
                 from app.models.system_config import SystemConfig
                 import json
-                
+
                 ads_data = []
                 sc = db.query(SystemConfig).filter_by(key=cache_key).first()
                 # Use 15 minute cache for Today, 60 minutes for others
                 cache_time = 900 if days_param in ['1', 'hoje', 'today'] else 3600
-                
+
                 if sc and sc.value:
                     try:
                         cached_obj = json.loads(sc.value)
@@ -499,7 +524,7 @@ def get_dashboard_metrics():
                             ads_data = cached_obj.get("data", [])
                     except:
                         ads_data = []
-                
+
                 if not ads_data:
                     # Cache miss or expired, fetch from API
                     ads_data = meli_service.get_ads_performance(None, d_from, d_to, fast=True)
@@ -512,14 +537,15 @@ def get_dashboard_metrics():
                             "data": ads_data
                         })
                         db.commit()
-                
+
                 if ads_data:
+                    ads_source = "live_api"
                     for row in ads_data:
                         if isinstance(row, dict):
                             r_amount = float(row.get('amount') or 0)
                             r_cost = float(row.get('cost') or 0)
                             r_item_id = row.get('item_id')
-                            
+
                             revenue_ads += r_amount
                             ads_cost_7d += r_cost
 
@@ -612,7 +638,14 @@ def get_dashboard_metrics():
 
                 # Ads Cost (Attributed)
                 a_cost = 0.0
-                if item.ml_item_id in ads_cost_per_unit_map:
+                if ads_daily_attr:
+                    # Level 1: cost of the item ON the sale day / units sold that day
+                    sale_day_br = (o.date_created - timedelta(hours=3)).date() if o.date_created else None
+                    if sale_day_br:
+                        a_cost = ads_daily_attr["per_unit_day"].get((item.ml_item_id, sale_day_br), 0.0) * qty
+                    # Level 2: residual cost (no-sale days) spread over period units
+                    a_cost += ads_daily_attr["per_unit_fallback"].get(item.ml_item_id, 0.0) * qty
+                elif item.ml_item_id in ads_cost_per_unit_map:
                     a_cost = ads_cost_per_unit_map[item.ml_item_id] * qty
                 
                 sum_prod_cost += p_cost
@@ -682,6 +715,11 @@ def get_dashboard_metrics():
 
         if valid_items_count > 0:
             calculated_avg_margin = total_margin_percent_sum / valid_items_count
+
+        # Orphan Ads spend (items with spend but ZERO sales in period) is real money
+        # burned — it belongs to no individual sale but must reduce total profit.
+        if ads_orphan_cost > 0:
+            calculated_profit -= ads_orphan_cost
 
         # Calculate Profit Trend
         profit_trend = 0.0
@@ -818,8 +856,10 @@ def get_dashboard_metrics():
             "revenue_organic": revenue_organic,
             
             "profit_7d": calculated_profit,
-            "profit_trend": round(profit_trend, 2), 
+            "profit_trend": round(profit_trend, 2),
             "ads_cost_7d": round(ads_cost_7d, 2),
+            "ads_orphan_cost": round(ads_orphan_cost, 2),
+            "ads_source": ads_source,
             "average_margin": calculated_avg_margin,
              
             "period_label": period_label,

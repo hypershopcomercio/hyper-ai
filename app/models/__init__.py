@@ -7,3 +7,4 @@ from app.models.competitor_intelligence import CompetitorMetricsHistory, Competi
 from app.models.pricing_log import PriceAdjustmentLog
 from app.models.fiscal import MonthlyTaxConfig, ProductTaxProfile, ProductPurchaseCost
 from app.models.nfe import NfeImport, NfeItem, NfeReconciliation
+from app.models.ml_ads_item_daily import MlAdsItemDaily

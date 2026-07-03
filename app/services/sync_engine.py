@@ -111,6 +111,55 @@ class SyncEngine:
             logger.error(f"Ads Metrics Sync Failed: {e}")
             self.db.rollback()
 
+    def sync_ads_item_daily(self, days_back: int = 3):
+        """
+        Persists REAL per-item, per-day Product Ads metrics into ml_ads_item_daily.
+        Re-syncs the last `days_back` days (ML consolidates Ads data with delay,
+        so D-1/D-2 values can change after first fetch).
+        """
+        try:
+            from app.models.ml_ads_item_daily import MlAdsItemDaily
+            import time
+
+            today = datetime.datetime.now().date()
+            logger.info(f"Starting Ads Item Daily Sync (last {days_back} days)...")
+
+            for offset in range(days_back):
+                day = today - datetime.timedelta(days=offset)
+                rows = self.meli_service.get_ads_performance_daily(day)
+
+                if not rows:
+                    logger.info(f"Ads Item Daily: no data for {day} (skipped, kept existing rows).")
+                    continue
+
+                # Replace the day atomically: delete + bulk insert
+                self.db.query(MlAdsItemDaily).filter(MlAdsItemDaily.date == day).delete()
+                inserted = 0
+                for r in rows:
+                    if not r.get("item_id"):
+                        continue
+                    # Skip zero rows to keep the table lean
+                    if not (r["cost"] or r["clicks"] or r["prints"] or r["amount"]):
+                        continue
+                    self.db.add(MlAdsItemDaily(
+                        item_id=r["item_id"],
+                        date=day,
+                        cost=round(r["cost"], 2),
+                        revenue=round(r["amount"], 2),
+                        clicks=r["clicks"],
+                        prints=r["prints"],
+                        units_quantity=r.get("units_quantity", 0)
+                    ))
+                    inserted += 1
+                self.db.commit()
+                logger.info(f"Ads Item Daily: {day} -> {inserted} items persisted.")
+                time.sleep(1)  # be gentle with rate limits between days
+
+            logger.info("Ads Item Daily Sync completed.")
+        except Exception as e:
+            logger.error(f"Ads Item Daily Sync Failed: {e}")
+            self.db.rollback()
+
     def sync_orders_incremental(self, lookback_hours: int = None):
         """
         Triggers the V2 Incremental Sync for orders.
