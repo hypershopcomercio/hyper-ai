@@ -353,7 +353,7 @@ class MeliApiService:
             
         params = {
             "date_from": d_from, "date_to": d_to,
-            "metrics": "clicks,prints,cost,cpc,acos,roas,amount",
+            "metrics": self.ADS_METRICS_BASE,
             "limit": 100
         }
         
@@ -388,7 +388,7 @@ class MeliApiService:
                     filtered.append({
                         "item_id": ad.get("item_id"),
                         "cost": float(m.get("cost", 0) or 0),
-                        "amount": float(m.get("amount", 0) or 0),
+                        "amount": float(m.get("total_amount", m.get("amount", 0)) or 0),
                         "clicks": int(m.get("clicks", 0) or 0),
                         "prints": int(m.get("prints", 0) or 0)
                     })
@@ -397,10 +397,10 @@ class MeliApiService:
             logger.error(f"Error fetching ads performance: {e}")
             return []
 
-    # Metrics set for per-day persistence. units_quantity = units sold attributed
-    # to Ads (direct + indirect). Some accounts/API versions reject the extended
-    # set, so callers fall back to the base set on non-200.
-    ADS_METRICS_BASE = "clicks,prints,cost,cpc,acos,roas,amount"
+    # Metrics set for per-day persistence (Api-Version 2 names: revenue is
+    # "total_amount", NOT "amount" — the old name returns 400 invalid_request_param).
+    # units_quantity = units sold attributed to Ads (direct + indirect).
+    ADS_METRICS_BASE = "clicks,prints,cost,cpc,acos,roas,total_amount"
     ADS_METRICS_EXTENDED = ADS_METRICS_BASE + ",units_quantity,direct_units_quantity,indirect_units_quantity"
 
     def get_ads_performance_daily(self, day) -> list[dict]:
@@ -428,6 +428,8 @@ class MeliApiService:
                 response = self.request('GET', endpoint, params=params, timeout=30, max_retries=3,
                                         extra_headers={"Api-Version": "2"})
                 if not response or response.status_code != 200:
+                    if response is not None:
+                        logger.warning(f"Ads daily fetch {d_str} failed: HTTP {response.status_code} {response.text[:200]}")
                     failed = True
                     break
                 data = response.json()
@@ -450,7 +452,7 @@ class MeliApiService:
                 rows.append({
                     "item_id": ad.get("item_id"),
                     "cost": float(m.get("cost", 0) or 0),
-                    "amount": float(m.get("amount", 0) or 0),
+                    "amount": float(m.get("total_amount", m.get("amount", 0)) or 0),
                     "clicks": int(m.get("clicks", 0) or 0),
                     "prints": int(m.get("prints", 0) or 0),
                     "units_quantity": int(m.get("units_quantity", 0) or 0),
