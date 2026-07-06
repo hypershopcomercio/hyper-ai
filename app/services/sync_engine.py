@@ -264,6 +264,20 @@ class SyncEngine:
             logger.error(f"Ads Sync failed: {e}")
             self._log_sync("listings", "error", processed_count, success_count, error_count, str(e), start_time=start_time)
 
+    def sync_single_ad(self, ml_id: str):
+        """
+        Re-sincroniza um unico anuncio via ML (mesmo caminho do _upsert_ad do
+        sync diario). Usado pelo endpoint POST /sync/listings/<ml_id> para
+        validar/atualizar um item sob demanda sem rodar o sync completo.
+        """
+        seller_id = self.get_seller_id()
+        details = self.meli_service.get_item_details([ml_id])
+        if not details:
+            raise Exception(f"Item {ml_id} nao retornado pela API do ML")
+        self._upsert_ad(details[0], seller_id)
+        self.db.commit()
+        return details[0]
+
     def _upsert_ad(self, item_data: dict, seller_id: str):
         ad_id = item_data["id"]
         ad = self.db.query(Ad).filter(Ad.id == ad_id).first()
@@ -292,7 +306,17 @@ class SyncEngine:
         ad.sold_quantity = int(item_data.get("sold_quantity", 0))
         ad.status = item_data.get("status")
         ad.listing_type_id = item_data.get("listing_type_id")
-        ad.listing_type = item_data.get("listing_type_id") 
+        ad.listing_type = item_data.get("listing_type_id")
+
+        # Datas de ciclo de vida do anuncio (card Criacao / lifecycle).
+        # O ML entrega ISO 8601 com timezone; fromisoformat (py3.11+) da conta.
+        for _dt_field in ("start_time", "stop_time"):
+            _raw = item_data.get(_dt_field)
+            if _raw:
+                try:
+                    setattr(ad, _dt_field, datetime.datetime.fromisoformat(str(_raw).replace("Z", "+00:00")))
+                except Exception:
+                    pass
         shipping = item_data.get("shipping", {})
         ad.free_shipping = shipping.get("free_shipping", False)
         ad.shipping_mode = shipping.get("mode") 

@@ -40,21 +40,22 @@ def sync_ml_stock():
 
 @api_bp.route('/sync/listings/<ml_id>', methods=['POST'])
 def sync_single(ml_id):
+    engine = SyncEngine()
     try:
-        # Not fully implemented in SyncEngine yet for single item return, 
-        # but we can implement or use generic sync.
-        # Ideally SyncEngine._upsert_ad can be called if we fetched item.
-        # For now, let's instantiate engine and call underlying meli_service?
-        # Simpler: Re-instantiate SyncEngine and do a full sync logic for one item?
-        # Or keep legacy MeliSyncService for single item? No, legacy is missing features (freight).
-        # Let's Skip implementing this perfectly for now or leave as TODO.
-        # User is clicking "Sync All". 
-        engine = SyncEngine()
-        # manual sync single
-        # engine.sync_single_ad(ml_id) -> Method doesn't exist.
-        return jsonify({"success": True, "message": "Single sync triggered (Check logs)"})
+        item = engine.sync_single_ad(ml_id)
+        return jsonify({
+            "success": True,
+            "message": f"Anuncio {ml_id} re-sincronizado",
+            "start_time": item.get("start_time"),
+            "status": item.get("status"),
+        })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        try:
+            engine.db.close()
+        except Exception:
+            pass
 
 @api_bp.route('/sync/metrics', methods=['POST'])
 def sync_metrics_today():
