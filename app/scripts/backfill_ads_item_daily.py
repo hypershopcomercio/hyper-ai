@@ -38,7 +38,10 @@ def main():
 
         total_inserted = 0
         consecutive_empty = 0
-        for offset in range(days, -1, -1):  # do mais antigo ao mais recente
+        # Do MAIS RECENTE ao mais antigo: dias recentes certamente tem dados se a
+        # API estiver ok (fail-fast confiavel); dias vazios no passado indicam o
+        # horizonte de dados da conta, nao erro.
+        for offset in range(0, days + 1):
             day = today - datetime.timedelta(days=offset)
 
             if not force:
@@ -51,16 +54,19 @@ def main():
             if not rows:
                 consecutive_empty += 1
                 print(f"{day}: sem dados retornados.")
-                # Fail-fast: se NADA foi inserido ainda e 5 dias seguidos vieram
-                # vazios, provavelmente e' erro de autorizacao (401), nao ausencia
-                # de campanhas. Aborta para nao gastar 60 dias em retries.
+                # Fail-fast: comecamos pelos dias RECENTES — se nem eles tem dados,
+                # e' erro de autorizacao/API, nao ausencia de campanhas.
                 if total_inserted == 0 and consecutive_empty >= 5:
-                    print("\nABORTADO: 5 dias seguidos sem dados e nenhum registro inserido.")
+                    print("\nABORTADO: 5 dias recentes seguidos sem dados e nenhum registro inserido.")
                     print("Provavel problema de autorizacao na API de Ads (veja os logs acima).")
-                    print("Verifique: 1) header Api-Version esta no codigo (git pull);")
-                    print("2) o app no DevCenter do ML tem permissao de Advertising;")
-                    print("3) teste manual com curl (fornecido pelo assistente).")
+                    print("Teste manual com curl (fornecido pelo assistente) para ver o erro cru.")
                     return
+                # Horizonte de dados: ja inserimos dados e os dias mais antigos
+                # vieram vazios — a conta nao tem historico alem daqui.
+                if total_inserted > 0 and consecutive_empty >= 7:
+                    print("\nParando: 7 dias seguidos sem dados apos inserir registros —")
+                    print("alcancado o horizonte de historico de Ads da conta.")
+                    break
                 time.sleep(2)
                 continue
             consecutive_empty = 0
