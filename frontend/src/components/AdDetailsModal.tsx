@@ -371,6 +371,19 @@ export function AdDetailsModal({ adId, onClose }: Props) {
 
     const lifecycle = getLifecycleStage();
 
+    // Ponte Ads Intelligence: dados reais por item (ml_ads_item_daily)
+    const ads = ad?.ads;
+    const adsHasData = !!ads?.has_data;
+    const fmtBRL = (v?: number | null) =>
+        (v ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    // Semântica de saúde do Ads x margem do produto
+    const marginPct = (ad?.financials?.net_margin_percent ?? ad?.margin_percent ?? 0);
+    const acosClass = ads?.acos == null ? 'text-slate-400'
+        : (marginPct > 0 && ads.acos >= marginPct) ? 'text-rose-400'
+            : (marginPct > 0 && ads.acos >= marginPct * 0.7) ? 'text-amber-400'
+                : 'text-emerald-400';
+    const roasClass = ads?.roas == null ? 'text-slate-400' : ads.roas >= 1 ? 'text-emerald-400' : 'text-rose-400';
+
     if (!activeTab) setActiveTab('overview');
     if (!adId) return null;
 
@@ -660,33 +673,33 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                         </Tooltip>
 
                                                         {/* Ads Spend (Total) */}
-                                                        <Tooltip title="Ads (Total)" content="Total investido em campanhas de anúncios pagos no Mercado Ads" position="bottom">
+                                                        <Tooltip title="Ads (Total)" content={<><strong>Total investido em Product Ads</strong><br />Gasto real por item nos últimos {ads?.period_days || 30} dias (fonte: ml_ads_item_daily)</>} position="bottom">
                                                             <div className="bg-[#0e0f14] p-3 rounded-lg border border-blue-500/20 hover:border-blue-500/40 transition-all cursor-help h-[72px] flex flex-col justify-between">
                                                                 <div className="flex justify-between items-center">
                                                                     <p className="text-[10px] font-semibold text-blue-400/80 uppercase tracking-wide">Ads Total</p>
                                                                     <Megaphone size={12} className="text-blue-500" />
                                                                 </div>
-                                                                <div className="text-lg font-bold text-slate-400 tabular-nums">
-                                                                    R$ 0,00
+                                                                <div className={`text-lg font-bold tabular-nums ${adsHasData ? 'text-blue-300' : 'text-slate-400'}`}>
+                                                                    {fmtBRL(ads?.spend)}
                                                                 </div>
                                                                 <div className="h-0.5 w-full bg-slate-800/50 rounded-full overflow-hidden">
-                                                                    <div className="h-full bg-blue-500/30 w-0 rounded-full"></div>
+                                                                    <div className={`h-full bg-blue-500/60 rounded-full transition-all`} style={{ width: adsHasData && ads?.total_revenue ? `${Math.min((ads.spend / ads.total_revenue) * 100, 100)}%` : '0%' }}></div>
                                                                 </div>
                                                             </div>
                                                         </Tooltip>
 
                                                         {/* Ads Sales */}
-                                                        <Tooltip title="Ads Sales" content="Vendas geradas diretamente por campanhas de anúncios pagos" position="bottom">
+                                                        <Tooltip title="Ads Sales" content={<><strong>Receita atribuída a Ads</strong><br />Vendas geradas por Product Ads nos últimos {ads?.period_days || 30} dias{ads?.units ? ` · ${ads.units} un.` : ''}</>} position="bottom">
                                                             <div className="bg-[#0e0f14] p-3 rounded-lg border border-purple-500/20 hover:border-purple-500/40 transition-all cursor-help h-[72px] flex flex-col justify-between">
                                                                 <div className="flex justify-between items-center">
                                                                     <p className="text-[10px] font-semibold text-purple-400/80 uppercase tracking-wide">Ads Sales</p>
                                                                     <Target size={12} className="text-purple-500" />
                                                                 </div>
-                                                                <div className="text-lg font-bold text-slate-400 tabular-nums">
-                                                                    R$ 0,00
+                                                                <div className={`text-lg font-bold tabular-nums ${adsHasData && (ads?.ads_revenue || 0) > 0 ? 'text-purple-300' : 'text-slate-400'}`}>
+                                                                    {fmtBRL(ads?.ads_revenue)}
                                                                 </div>
                                                                 <div className="h-0.5 w-full bg-slate-800/50 rounded-full overflow-hidden">
-                                                                    <div className="h-full bg-purple-500/30 w-0 rounded-full"></div>
+                                                                    <div className={`h-full bg-purple-500/60 rounded-full transition-all`} style={{ width: adsHasData && ads?.total_revenue ? `${Math.min((ads.ads_revenue / ads.total_revenue) * 100, 100)}%` : '0%' }}></div>
                                                                 </div>
                                                             </div>
                                                         </Tooltip>
@@ -722,8 +735,8 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                                         <Activity size={12} className="text-amber-500 group-hover:text-amber-400 transition-colors" />
                                                                     </div>
                                                                     <div>
-                                                                        <p className="text-sm font-semibold text-slate-400 group-hover:text-slate-300 transition-colors">
-                                                                            0.00%
+                                                                        <p className={`text-sm font-semibold transition-colors ${acosClass}`}>
+                                                                            {ads?.acos != null ? `${ads.acos.toFixed(2)}%` : '—'}
                                                                         </p>
                                                                         <p className="text-[10px] text-slate-500">
                                                                             Custo/Vendas
@@ -740,8 +753,8 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                                         <TrendingUp size={12} className="text-cyan-500 group-hover:text-cyan-400 transition-colors" />
                                                                     </div>
                                                                     <div>
-                                                                        <p className="text-sm font-semibold text-slate-400 group-hover:text-slate-300 transition-colors">
-                                                                            0.00x
+                                                                        <p className={`text-sm font-semibold transition-colors ${roasClass}`}>
+                                                                            {ads?.roas != null ? `${ads.roas.toFixed(2)}x` : '—'}
                                                                         </p>
                                                                         <p className="text-[10px] text-slate-500">
                                                                             Retorno
@@ -758,8 +771,8 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                                         <Activity size={12} className="text-orange-500 group-hover:text-orange-400 transition-colors" />
                                                                     </div>
                                                                     <div>
-                                                                        <p className="text-sm font-semibold text-slate-400 group-hover:text-slate-300 transition-colors">
-                                                                            0.00%
+                                                                        <p className={`text-sm font-semibold transition-colors ${ads?.tacos != null ? 'text-orange-300' : 'text-slate-400'}`}>
+                                                                            {ads?.tacos != null ? `${ads.tacos.toFixed(2)}%` : '—'}
                                                                         </p>
                                                                         <p className="text-[10px] text-slate-500">
                                                                             Total

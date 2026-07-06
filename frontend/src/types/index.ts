@@ -129,6 +129,27 @@ export interface Ad {
         roas: number;
         acos: number;
     };
+
+    // Ponte Ads Intelligence: resumo real por item (ml_ads_item_daily)
+    ads?: AdsSummary;
+}
+
+export interface AdsSummary {
+    has_data: boolean;
+    period_days: number;
+    spend: number;
+    ads_revenue: number;
+    total_revenue: number;
+    clicks: number;
+    prints: number;
+    units: number;
+    days_active: number;
+    acos: number | null;
+    roas: number | null;
+    tacos: number | null;
+    cpc: number | null;
+    cvr: number | null;
+    source: 'db' | 'live_api' | 'none';
 }
 
 export interface DashboardMetrics {

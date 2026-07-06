@@ -420,7 +420,14 @@ def get_ad_details(ad_id):
             "is_full": ad.is_full,
             
             "financials": _calculate_detailed_financials(db, ad, days_of_stock=days_of_stock),
-            
+
+            # Ponte Ads Intelligence: resumo real por item (read-only)
+            "ads": _calculate_ads_summary(db, ad, days=30),
+
+            # Datas do ciclo de vida do anúncio (card Criação)
+            "start_time": ad.start_time.isoformat() if getattr(ad, 'start_time', None) else None,
+            "created_at": ad.created_at.isoformat() if ad.created_at else None,
+
             "pictures": ad.pictures,
             "manual_video_verified": getattr(ad, 'manual_video_verified', False),
             "video_id": getattr(ad, 'video_id', None),
@@ -444,6 +451,84 @@ def get_ad_details(ad_id):
         return jsonify({"error": str(e)}), 500
     finally:
         db.close()
+
+def _calculate_ads_summary(db, ad, days=30):
+    """
+    Resumo REAL de Product Ads por item (read-only), fonte ml_ads_item_daily.
+
+    Alimenta os cards Ads Total / Ads Sales / ACOS / ROAS / TACOS do modal.
+    - ACOS  = gasto / receita atribuída a Ads
+    - ROAS  = receita atribuída a Ads / gasto
+    - TACOS = gasto / receita TOTAL do item no período (ml_metrics_daily)
+
+    Retorna sempre um dict; has_data=False quando não há linhas no período
+    (o front mostra estado neutro em vez de números falsos).
+    """
+    from app.models.ml_ads_item_daily import MlAdsItemDaily
+    from app.models.ml_metrics_daily import MlMetricsDaily
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import func
+
+    TZ_BR = timezone(timedelta(hours=-3))
+    today_br = datetime.now(TZ_BR).date()
+    start_date = today_br - timedelta(days=days)
+
+    row = db.query(
+        func.coalesce(func.sum(MlAdsItemDaily.cost), 0),
+        func.coalesce(func.sum(MlAdsItemDaily.revenue), 0),
+        func.coalesce(func.sum(MlAdsItemDaily.clicks), 0),
+        func.coalesce(func.sum(MlAdsItemDaily.prints), 0),
+        func.coalesce(func.sum(MlAdsItemDaily.units_quantity), 0),
+        func.count(MlAdsItemDaily.id),
+    ).filter(
+        MlAdsItemDaily.item_id == ad.id,
+        MlAdsItemDaily.date >= start_date,
+        MlAdsItemDaily.date <= today_br,
+    ).first()
+
+    spend = float(row[0] or 0)
+    ads_revenue = float(row[1] or 0)
+    clicks = int(row[2] or 0)
+    prints = int(row[3] or 0)
+    units = int(row[4] or 0)
+    days_active = int(row[5] or 0)
+
+    # Receita total do item no período (para TACOS)
+    total_rev = db.query(
+        func.coalesce(func.sum(MlMetricsDaily.sales_revenue), 0)
+    ).filter(
+        MlMetricsDaily.item_id == ad.id,
+        MlMetricsDaily.date >= start_date,
+        MlMetricsDaily.date <= today_br,
+    ).scalar()
+    total_revenue = float(total_rev or 0)
+
+    has_data = days_active > 0 and (spend > 0 or ads_revenue > 0)
+
+    acos = round(spend / ads_revenue * 100, 2) if ads_revenue > 0 else None
+    roas = round(ads_revenue / spend, 2) if spend > 0 else None
+    tacos = round(spend / total_revenue * 100, 2) if total_revenue > 0 else None
+    cpc = round(spend / clicks, 2) if clicks > 0 else None
+    cvr = round(units / clicks * 100, 2) if clicks > 0 else None
+
+    return {
+        "has_data": has_data,
+        "period_days": days,
+        "spend": round(spend, 2),
+        "ads_revenue": round(ads_revenue, 2),
+        "total_revenue": round(total_revenue, 2),
+        "clicks": clicks,
+        "prints": prints,
+        "units": units,
+        "days_active": days_active,
+        "acos": acos,
+        "roas": roas,
+        "tacos": tacos,
+        "cpc": cpc,
+        "cvr": cvr,
+        "source": "db" if days_active > 0 else "none",
+    }
+
 
 def _compute_shared_financials(ad, metric, days_of_stock, effective_price):
     """
