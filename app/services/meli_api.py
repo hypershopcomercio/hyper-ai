@@ -289,9 +289,11 @@ class MeliApiService:
 
     def get_advertiser_id(self, fast=False):
         """
-        Gets the advertiser_id for Product Ads.
-        Priority: DB cache -> oauth_tokens seller_id -> API call (last resort).
-        For ML PADS, advertiser_id == seller_id.
+        Gets the REAL advertiser_id for Product Ads via /advertising/advertisers.
+
+        IMPORTANT: advertiser_id is NOT the seller_id. Confirmed in production:
+        seller 1400902328 -> advertiser 347940. The old assumption poisoned the
+        legacy cache key 'ml_advertiser_id', so this uses 'ml_advertiser_id_v2'.
         """
         db = self.db_session
         local_session = False
@@ -303,43 +305,31 @@ class MeliApiService:
         try:
             from app.models.system_config import SystemConfig
 
-            # 1. Check cache
-            cached = db.query(SystemConfig).filter_by(key="ml_advertiser_id").first()
+            # 1. Check cache (v2 key — legacy key held seller_id, which is wrong)
+            cached = db.query(SystemConfig).filter_by(key="ml_advertiser_id_v2").first()
             if cached and cached.value:
                 return cached.value
 
-            # 2. Use seller_id from oauth_tokens (no API call needed)
-            token = db.query(OAuthToken).filter_by(provider="mercadolivre").first()
-            if token and (token.seller_id or token.user_id):
-                advertiser_id = str(token.seller_id or token.user_id)
-                # Cache it
-                if cached:
-                    cached.value = advertiser_id
-                else:
-                    db.add(SystemConfig(key="ml_advertiser_id", value=advertiser_id, group="cache"))
-                db.commit()
-                logger.info(f"Cached advertiser_id={advertiser_id} from oauth_tokens.")
-                return advertiser_id
-
-            # 3. Last resort: API call (skip if fast mode)
-            if fast:
-                logger.warning("get_advertiser_id: Fast mode enabled and no cache/token found. Skipping API call.")
-                return None
-
+            # 2. Official source: advertisers endpoint (requires Api-Version: 1)
             response = self.request('GET', "/advertising/advertisers", params={"product_id": "PADS"},
-                                    extra_headers={"Api-Version": "1"})
+                                    extra_headers={"Api-Version": "1"},
+                                    timeout=5 if fast else 30,
+                                    max_retries=0 if fast else 3)
             if response and response.status_code == 200:
                 advertisers = response.json().get("advertisers", [])
-                if advertisers:
-                    advertiser_id = str(advertisers[0].get("advertiser_id"))
+                adv = next((a for a in advertisers if a.get("site_id") == "MLB"),
+                           advertisers[0] if advertisers else None)
+                if adv and adv.get("advertiser_id"):
+                    advertiser_id = str(adv["advertiser_id"])
                     if cached:
                         cached.value = advertiser_id
                     else:
-                        db.add(SystemConfig(key="ml_advertiser_id", value=advertiser_id, group="cache"))
+                        db.add(SystemConfig(key="ml_advertiser_id_v2", value=advertiser_id, group="cache"))
                     db.commit()
+                    logger.info(f"Cached advertiser_id={advertiser_id} from /advertising/advertisers.")
                     return advertiser_id
 
-            logger.error("Could not determine advertiser_id from any source.")
+            logger.error(f"Could not determine advertiser_id (status={response.status_code if response else 'no response'}).")
             return None
         except Exception as e:
             logger.error(f"Error getting advertiser_id: {e}")
