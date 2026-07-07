@@ -104,6 +104,7 @@ export interface Ad {
         commission_cost: number;
         shipping_cost: number;
         tax_cost: number;
+        variable_cost?: number;
         fixed_cost_share?: number;
         return_risk_cost?: number;
         storage_cost?: number;

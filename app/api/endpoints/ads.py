@@ -237,6 +237,26 @@ def get_ads():
             forecasts = db.query(ProductForecast).filter(ProductForecast.mlb_id.in_(ad_ids)).all()
             forecast_map = {f.mlb_id: f for f in forecasts}
 
+        # Batch fetch custo variavel (embalagem/un.) por produto (fiscal), sem N+1
+        from app.models.fiscal import ProductPurchaseCost
+        pkg_map = {}
+        if ad_ids:
+            pkg_rows = db.query(ProductPurchaseCost).filter(
+                ProductPurchaseCost.mlb_id.in_(ad_ids),
+                ProductPurchaseCost.is_active == True
+            ).order_by(ProductPurchaseCost.effective_from.asc()).all()
+            # asc() garante que o mais recente (effective_from maior) sobrescreve
+            for pr in pkg_rows:
+                if pr.packaging_cost:
+                    pkg_map[pr.mlb_id] = float(pr.packaging_cost)
+        sc_pkg = db.query(SystemConfig).filter(SystemConfig.key == 'fixed_packaging_cost').first()
+        config_pkg = 0.0
+        if sc_pkg and sc_pkg.value:
+            try:
+                config_pkg = float(sc_pkg.value)
+            except (ValueError, TypeError):
+                config_pkg = 0.0
+
         results = []
         for ad in ads:
             # 1. Determine Effective Price (Promotion vs Normal)
@@ -258,8 +278,9 @@ def get_ads():
             if ad.sku and ad.sku in metrics_map:
                 metric = metrics_map[ad.sku]
                 
-            fin_data = _compute_shared_financials(ad, metric, days_of_stock, effective_price)
-            
+            var_cost = pkg_map.get(ad.id, config_pkg)
+            fin_data = _compute_shared_financials(ad, metric, days_of_stock, effective_price, variable_cost=var_cost)
+
             # Map back for result construction
             fixed_share = fin_data['fixed_cost_share']
             risk_cost = fin_data['return_risk_cost']
@@ -292,6 +313,7 @@ def get_ads():
                 "commission_cost": ad.commission_cost,
                 "shipping_cost": ad.shipping_cost,
                 "ads_spend_30d": ad.ads_spend_30d,
+                "variable_cost": var_cost,
                 "fixed_cost_share": fixed_share,
                 "return_risk_cost": risk_cost,
                 "storage_cost": storage_cost,
@@ -530,7 +552,33 @@ def _calculate_ads_summary(db, ad, days=30):
     }
 
 
-def _compute_shared_financials(ad, metric, days_of_stock, effective_price):
+def _resolve_variable_cost(db, ad):
+    """
+    Custo variavel por unidade (embalagem/un.) para o card C. Variaveis.
+    Prioridade: ProductPurchaseCost.packaging_cost (fiscal, por produto) →
+    SystemConfig 'fixed_packaging_cost' (global) → 0.
+    Read-only.
+    """
+    try:
+        from app.models.fiscal import ProductPurchaseCost
+        pc = db.query(ProductPurchaseCost).filter(
+            ProductPurchaseCost.mlb_id == ad.id,
+            ProductPurchaseCost.is_active == True
+        ).order_by(ProductPurchaseCost.effective_from.desc()).first()
+        if pc and pc.packaging_cost:
+            return float(pc.packaging_cost)
+    except Exception:
+        pass
+    sc = db.query(SystemConfig).filter(SystemConfig.key == 'fixed_packaging_cost').first()
+    if sc and sc.value:
+        try:
+            return float(sc.value)
+        except (ValueError, TypeError):
+            pass
+    return 0.0
+
+
+def _compute_shared_financials(ad, metric, days_of_stock, effective_price, variable_cost=0.0):
     """
     Centralized logic for financial costs and margin calculation.
     Used by both get_ads (List) and get_ad_details (Detail).
@@ -610,27 +658,30 @@ def _compute_shared_financials(ad, metric, days_of_stock, effective_price):
     # 4. Net Margin Calc
     # NOTE: ads_spend_30d is intentionally EXCLUDED from margin calculation
     # It's a marketing cost, not a product unit cost
+    variable_cost = float(variable_cost or 0)
     total_cost = (
-        cost + 
-        commission + 
-        shipping + 
-        tax + 
-        fixed_share + 
-        return_risk + 
-        storage_total + 
-        storage_risk
+        cost +
+        commission +
+        shipping +
+        tax +
+        fixed_share +
+        return_risk +
+        storage_total +
+        storage_risk +
+        variable_cost
     )
-    
+
     margin_value = effective_price - total_cost
     margin_percent = (margin_value / effective_price * 100) if effective_price > 0 else 0
-    
+
     return {
         "cost": cost,
         "commission_cost": commission,
         "shipping_cost": shipping,
         "tax_cost": tax,
         "ads_spend_30d": ads_spend,
-        
+        "variable_cost": variable_cost,
+
         "fixed_cost_share": fixed_share,
         "return_risk_cost": return_risk,
         "storage_cost": storage_total,
@@ -662,7 +713,8 @@ def _calculate_detailed_financials(db, ad, days_of_stock=None):
         effective_price = float(ad.promotion_price)
 
     final_days = days_of_stock if days_of_stock is not None else ad.days_of_stock
-    return _compute_shared_financials(ad, metric, final_days, effective_price)
+    variable_cost = _resolve_variable_cost(db, ad)
+    return _compute_shared_financials(ad, metric, final_days, effective_price, variable_cost=variable_cost)
 
 @api_bp.route('/ads/<ad_id>/verify-video', methods=['PATCH'])
 def verify_ad_video_manual(ad_id):

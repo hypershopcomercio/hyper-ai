@@ -156,15 +156,17 @@ export function AdDetailsModal({ adId, onClose }: Props) {
     }, [activeTab, ad, targetMargin]);
 
     // Fetch Pricing Resolution Effect (Fase 2.6)
+    // Busca 1x ao abrir o anúncio: alimenta as abas Precificação/Ficha Fiscal
+    // E o card DIFAL da aba Financeiro (fonte única = resolver, sem divergência).
     useEffect(() => {
-        if ((activeTab === 'margin' || activeTab === 'fiscal') && ad) {
+        if (ad?.id) {
             const fetchResolution = async () => {
                 setIsResolvingPricing(true);
                 try {
                     const res = await api.get(`/pricing/resolve/${ad.id}`);
                     setPricingResolution(res.data);
                 } catch (err: any) {
-                    console.error("Erro no resolver:", err);
+                    // Resolver bloqueia (400) quando faltam dados fiscais — DIFAL fica 0.
                     setPricingResolution(null);
                 } finally {
                     setIsResolvingPricing(false);
@@ -172,7 +174,7 @@ export function AdDetailsModal({ adId, onClose }: Props) {
             };
             fetchResolution();
         }
-    }, [activeTab, ad]);
+    }, [ad?.id]);
 
 
     const handleProtectClick = () => {
@@ -383,6 +385,10 @@ export function AdDetailsModal({ adId, onClose }: Props) {
             : (marginPct > 0 && ads.acos >= marginPct * 0.7) ? 'text-amber-400'
                 : 'text-emerald-400';
     const roasClass = ads?.roas == null ? 'text-slate-400' : ads.roas >= 1 ? 'text-emerald-400' : 'text-rose-400';
+    // DIFAL: fonte única = resolver de precificação (mesma da aba Ficha Fiscal)
+    const difalCost = Number(pricingResolution?.costs?.difal_value ?? 0);
+    // Custo variável (embalagem/un.) vindo do backend
+    const variableCost = Number((ad?.financials as any)?.variable_cost ?? 0);
 
     if (!activeTab) setActiveTab('overview');
     if (!adId) return null;
@@ -807,8 +813,8 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                                         <FileText size={12} className="text-slate-600 group-hover:text-slate-400 transition-colors" />
                                                                     </div>
                                                                     <div>
-                                                                        <p className="text-sm font-mono font-medium text-slate-500 group-hover:text-slate-400 transition-colors">
-                                                                            R$ 0,00
+                                                                        <p className={`text-sm font-mono font-medium transition-colors ${difalCost > 0 ? 'text-rose-400 group-hover:text-rose-300' : 'text-slate-500 group-hover:text-slate-400'}`}>
+                                                                            {difalCost > 0 ? '-' : ''}{fmtBRL(difalCost)}
                                                                         </p>
                                                                         <p className="text-[10px] text-slate-500 font-mono">
                                                                             ICMS Interestadual
@@ -910,7 +916,7 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                                 <div className="space-y-2 w-64">
                                                                     <div className="flex justify-between text-[10px]">
                                                                         <span className="text-slate-400">Custo por Unidade:</span>
-                                                                        <span className="text-rose-400 font-bold">-{((((ad.financials as Record<string, unknown>)?.variable_cost as number) || 0)).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                                                                        <span className="text-rose-400 font-bold">-{(variableCost).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                                                                     </div>
                                                                     <div className="border-t border-slate-700/50 pt-2 text-[9px] text-slate-500 space-y-1">
                                                                         <p>• Fita adesiva • Plástico bolha</p>
@@ -919,7 +925,7 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                                     </div>
                                                                     <div className="flex justify-between text-[10px] pt-1 border-t border-slate-700/50">
                                                                         <span className="text-slate-400">% do Preço:</span>
-                                                                        <span className="text-slate-300 font-medium">{((((ad.financials as Record<string, unknown>)?.variable_cost as number) || 0) / ad.price * 100).toFixed(1)}%</span>
+                                                                        <span className="text-slate-300 font-medium">{(variableCost / ad.price * 100).toFixed(1)}%</span>
                                                                     </div>
                                                                 </div>
                                                             } position="bottom">
@@ -930,7 +936,7 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                                     </div>
                                                                     <div>
                                                                         <p className="text-base font-mono font-semibold text-rose-400 group-hover:text-rose-300 transition-colors">
-                                                                            -{((((ad.financials as Record<string, unknown>)?.variable_cost as number) || 0)).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                                            -{(variableCost).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                                                         </p>
                                                                         <p className="text-[10px] text-slate-500 font-mono">
                                                                             Embalagem/Un.
