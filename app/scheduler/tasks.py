@@ -23,5 +23,29 @@ def run_daily_sync():
         
     # 3. Sync Metrics (Visits, Sales, Conversion)
     engine.sync_metrics()
-    
+
+    # 4. Motor de decisão de Ads: gera recomendações, mede outcomes e notifica
+    run_ads_decision_engine()
+
     logger.info("Scheduler: Daily Sync Job Finished.")
+
+
+def run_ads_decision_engine():
+    """Gera recomendações de Ads + feedback loop + notificação WhatsApp (se configurada)."""
+    from app.core.database import SessionLocal
+    db = SessionLocal()
+    try:
+        from app.services.ads_decision_engine import AdsDecisionEngine
+        engine = AdsDecisionEngine(db)
+
+        summary = engine.generate_recommendations(days=30)
+        engine.measure_outcomes()
+
+        if summary.get("created"):
+            from app.services.notifier import send_whatsapp, format_ads_recommendations_summary
+            send_whatsapp(format_ads_recommendations_summary(summary))
+    except Exception as e:
+        logger.error(f"Ads Decision Engine job failed: {e}")
+        db.rollback()
+    finally:
+        db.close()

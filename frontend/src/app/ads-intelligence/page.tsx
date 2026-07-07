@@ -7,7 +7,8 @@ import {
 } from 'recharts';
 import {
     Megaphone, Flame, TrendingUp, TrendingDown, AlertTriangle,
-    CheckCircle2, Rocket, DollarSign, Target, MousePointerClick, ExternalLink
+    CheckCircle2, Rocket, DollarSign, Target, MousePointerClick, ExternalLink,
+    Check, X, Bot, Loader2
 } from 'lucide-react';
 
 interface AdsAction {
@@ -39,6 +40,19 @@ interface AdsItem {
     ads_profit: number | null;
     classification: string;
     action: AdsAction;
+}
+
+interface Recommendation {
+    id: number;
+    item_id: string;
+    action_code: string;
+    classification: string;
+    lifecycle_stage: string | null;
+    reason: string;
+    impact: string | null;
+    metrics_snapshot: { title?: string; sku?: string; spend?: number; acos?: number | null } | null;
+    status: string;
+    created_at: string | null;
 }
 
 interface Overview {
@@ -77,6 +91,19 @@ export default function AdsIntelligencePage() {
     const [loading, setLoading] = useState(true);
     const [period, setPeriod] = useState(30);
     const [classFilter, setClassFilter] = useState<string | null>(null);
+    const [recs, setRecs] = useState<Recommendation[]>([]);
+    const [writeEnabled, setWriteEnabled] = useState(false);
+    const [deciding, setDeciding] = useState<number | null>(null);
+    const [recFeedback, setRecFeedback] = useState<string | null>(null);
+
+    const loadRecommendations = () => {
+        api.get('/ads-intelligence/recommendations?status=pending')
+            .then(res => {
+                setRecs(res.data.recommendations || []);
+                setWriteEnabled(!!res.data.ads_write_enabled);
+            })
+            .catch(err => console.error("Error loading recommendations", err));
+    };
 
     useEffect(() => {
         let cancelled = false;
@@ -87,6 +114,24 @@ export default function AdsIntelligencePage() {
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
     }, [period]);
+
+    useEffect(() => { loadRecommendations(); }, []);
+
+    const decideRecommendation = async (id: number, decision: 'accept' | 'reject') => {
+        setDeciding(id);
+        setRecFeedback(null);
+        try {
+            const res = await api.post(`/ads-intelligence/recommendations/${id}/decide`, { decision });
+            if (decision === 'accept') {
+                setRecFeedback(res.data.message || (res.data.executed ? 'Executado no ML.' : 'Aceita.'));
+            }
+            setRecs(prev => prev.filter(r => r.id !== id));
+        } catch (err: any) {
+            setRecFeedback(err?.response?.data?.error || 'Erro ao decidir recomendação.');
+        } finally {
+            setDeciding(null);
+        }
+    };
 
     const filteredItems = useMemo(() => {
         if (!data?.items) return [];
@@ -180,6 +225,68 @@ export default function AdsIntelligencePage() {
                     </div>
                 </div>
             </div>
+
+            {/* Recommendations Queue (Nível 1) */}
+            {(recs.length > 0 || recFeedback) && (
+                <div className="bg-violet-500/[0.04] border border-violet-500/20 rounded-2xl p-6">
+                    <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
+                        <h3 className="text-sm font-bold text-violet-300 uppercase tracking-widest flex items-center gap-2">
+                            <Bot size={16} /> Recomendações Pendentes ({recs.length})
+                        </h3>
+                        <span className="text-[10px] text-slate-500">
+                            {writeEnabled
+                                ? "Execução automática LIGADA — aceitar 'Pausar' executa no ML na hora"
+                                : "Execução automática desligada — aceitar registra a decisão para você executar no painel do ML"}
+                        </span>
+                    </div>
+                    {recFeedback && (
+                        <div className="mb-4 text-xs text-violet-200 bg-violet-500/10 border border-violet-500/20 rounded-lg px-3 py-2">
+                            {recFeedback}
+                        </div>
+                    )}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {recs.map(rec => {
+                            const snap = rec.metrics_snapshot || {};
+                            const meta = CLASS_META[rec.classification] || CLASS_META["saudavel"];
+                            return (
+                                <div key={rec.id} className="bg-[#121217] border border-white/5 rounded-xl p-4 flex flex-col gap-2">
+                                    <div className="flex items-start justify-between gap-2">
+                                        <div className="min-w-0">
+                                            <div className="text-xs font-bold text-white truncate">{snap.title || rec.item_id}</div>
+                                            <div className="text-[10px] text-slate-500">
+                                                {snap.sku || rec.item_id}
+                                                {rec.lifecycle_stage && <span className="ml-2 px-1.5 py-0.5 bg-slate-800 rounded text-slate-400">{rec.lifecycle_stage}</span>}
+                                            </div>
+                                        </div>
+                                        <span className={`shrink-0 px-2 py-1 rounded-full text-[10px] font-bold border ${meta.bg} ${meta.color}`}>
+                                            {meta.label}
+                                        </span>
+                                    </div>
+                                    <div className="text-[11px] text-slate-400 leading-snug">{rec.reason}</div>
+                                    {rec.impact && <div className="text-[11px] font-medium text-emerald-400">{rec.impact}</div>}
+                                    <div className="flex items-center gap-2 mt-1">
+                                        <button
+                                            onClick={() => decideRecommendation(rec.id, 'accept')}
+                                            disabled={deciding === rec.id}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-600/30 transition-all disabled:opacity-50"
+                                        >
+                                            {deciding === rec.id ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                                            Aceitar
+                                        </button>
+                                        <button
+                                            onClick={() => decideRecommendation(rec.id, 'reject')}
+                                            disabled={deciding === rec.id}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800/80 text-slate-400 border border-white/5 hover:text-white transition-all disabled:opacity-50"
+                                        >
+                                            <X size={12} /> Rejeitar
+                                        </button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
 
             {/* Daily Chart */}
             <div className="bg-[#121217] border border-white/5 rounded-2xl p-6">

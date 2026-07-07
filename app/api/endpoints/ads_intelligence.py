@@ -20,83 +20,12 @@ from app.api import api_bp
 from app.core.database import SessionLocal
 from app.models.ad import Ad
 from app.models.ml_ads_item_daily import MlAdsItemDaily
+# Fonte única da lógica de classificação/sugestão (compartilhada com o job diário)
+from app.services.ads_decision_engine import _classify, _suggest_action, AdsDecisionEngine, ads_write_enabled
 
 logger = logging.getLogger(__name__)
 
 TZ_BR = timezone(timedelta(hours=-3))
-
-
-def _suggest_action(classification, spend, ads_revenue, acos, margin_percent, days_active, period_days):
-    """
-    Primeira camada do motor de decisão de Ads: sugestão read-only por item.
-    NUNCA executa nada no ML — apenas recomenda com justificativa e impacto,
-    para validação humana (níveis de autonomia maiores virão depois).
-    """
-    # Projeção mensal do gasto no ritmo atual
-    monthly_spend = (spend / days_active * 30) if days_active > 0 else 0.0
-
-    if classification == "queimando":
-        return {
-            "code": "pausar",
-            "label": "Pausar Ads deste item",
-            "reason": f"Gastou R${spend:.2f} em {days_active} dia(s) sem NENHUMA venda via Ads no período.",
-            "impact": f"Economia estimada de R${monthly_spend:.2f}/mês",
-        }
-    if classification == "prejuizo":
-        loss = ads_revenue * (margin_percent / 100.0) - spend if margin_percent else -spend
-        return {
-            "code": "reduzir_ou_pausar",
-            "label": "Reduzir lance/verba ou pausar",
-            "reason": f"ACOS {acos:.1f}% >= margem {margin_percent:.1f}% — cada venda via Ads dá prejuízo (resultado no período: R${loss:.2f}).",
-            "impact": f"Estancar perda de ~R${abs(loss) / max(days_active, 1) * 30:.2f}/mês",
-        }
-    if classification == "atencao":
-        if margin_percent is not None:
-            reason = f"ACOS {acos:.1f}% consome mais de 70% da margem ({margin_percent:.1f}%) — lucro via Ads quase zerado."
-        else:
-            reason = f"ACOS {acos:.1f}% elevado e margem do produto desconhecida — cadastre o custo para avaliar."
-        return {
-            "code": "monitorar",
-            "label": "Monitorar de perto / reduzir lance",
-            "reason": reason,
-            "impact": "Risco de virar prejuízo com pequena piora de CPC",
-        }
-    if classification == "escalar":
-        headroom = (margin_percent - acos) if (margin_percent and acos is not None) else None
-        return {
-            "code": "aumentar",
-            "label": "Aumentar investimento",
-            "reason": (f"ACOS {acos:.1f}% bem abaixo da margem {margin_percent:.1f}% — folga de {headroom:.1f}pp para escalar."
-                       if headroom is not None else f"ACOS {acos:.1f}% baixo com vendas consistentes."),
-            "impact": f"Receita via Ads atual R${ads_revenue:.2f} em {period_days}d com espaço para crescer",
-        }
-    return {
-        "code": "manter",
-        "label": "Manter como está",
-        "reason": "ACOS confortável dentro da margem.",
-        "impact": None,
-    }
-
-
-def _classify(spend, ads_revenue, acos, margin_percent):
-    if spend > 0 and ads_revenue <= 0:
-        return "queimando"
-    if margin_percent is not None and margin_percent > 0 and acos is not None:
-        if acos >= margin_percent:
-            return "prejuizo"
-        if acos >= margin_percent * 0.7:
-            return "atencao"
-        if acos <= margin_percent * 0.4:
-            return "escalar"
-        return "saudavel"
-    # Margem desconhecida: bandas fixas conservadoras de ACOS
-    if acos is None:
-        return "saudavel"
-    if acos >= 25:
-        return "atencao"
-    if acos <= 10:
-        return "escalar"
-    return "saudavel"
 
 
 @api_bp.route('/ads-intelligence/overview', methods=['GET'])
@@ -247,5 +176,110 @@ def ads_intelligence_overview():
         import traceback
         traceback.print_exc()
         return jsonify({"has_data": False, "error": str(e)}), 500
+    finally:
+        db.close()
+
+
+# ============================================================
+# Nível 1 — Fila de recomendações (aceitar/rejeitar com 1 clique)
+# ============================================================
+
+def _rec_to_dict(r):
+    return {
+        "id": r.id,
+        "item_id": r.item_id,
+        "action_code": r.action_code,
+        "classification": r.classification,
+        "lifecycle_stage": r.lifecycle_stage,
+        "reason": r.reason,
+        "impact": r.impact,
+        "metrics_snapshot": r.metrics_snapshot,
+        "status": r.status,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "decided_at": r.decided_at.isoformat() if r.decided_at else None,
+        "executed_at": r.executed_at.isoformat() if r.executed_at else None,
+        "execution_result": r.execution_result,
+        "outcome": r.outcome,
+    }
+
+
+@api_bp.route('/ads-intelligence/recommendations', methods=['GET'])
+def ads_recommendations_list():
+    from app.models.ads_recommendation import AdsRecommendation
+    db = SessionLocal()
+    try:
+        status = request.args.get('status', 'pending')
+        query = db.query(AdsRecommendation)
+        if status != 'all':
+            query = query.filter(AdsRecommendation.status == status)
+        recs = query.order_by(AdsRecommendation.created_at.desc()).limit(100).all()
+        return jsonify({
+            "recommendations": [_rec_to_dict(r) for r in recs],
+            "ads_write_enabled": ads_write_enabled(),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
+
+
+@api_bp.route('/ads-intelligence/recommendations/generate', methods=['POST'])
+def ads_recommendations_generate():
+    """Gera recomendações sob demanda (o job diário também faz isso às 04:00)."""
+    db = SessionLocal()
+    try:
+        engine = AdsDecisionEngine(db)
+        summary = engine.generate_recommendations(days=int(request.args.get('days', '30')))
+        return jsonify(summary)
+    except Exception as e:
+        db.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
+
+
+@api_bp.route('/ads-intelligence/recommendations/<int:rec_id>/decide', methods=['POST'])
+def ads_recommendations_decide(rec_id):
+    """
+    Decide uma recomendação pendente: {"decision": "accept" | "reject"}.
+    accept + ação executável + ADS_WRITE_ENABLED=true -> executa no ML na hora.
+    accept com escrita desligada -> fica 'accepted' para execução manual.
+    """
+    from app.models.ads_recommendation import AdsRecommendation
+    db = SessionLocal()
+    try:
+        payload = request.get_json(silent=True) or {}
+        decision = payload.get("decision")
+        if decision not in ("accept", "reject"):
+            return jsonify({"error": "decision deve ser 'accept' ou 'reject'"}), 400
+
+        rec = db.query(AdsRecommendation).filter_by(id=rec_id).first()
+        if not rec:
+            return jsonify({"error": "recomendação não encontrada"}), 404
+        if rec.status != "pending":
+            return jsonify({"error": f"recomendação já está '{rec.status}'"}), 409
+
+        rec.decided_at = datetime.utcnow()
+        rec.decided_by = "user"
+
+        if decision == "reject":
+            rec.status = "rejected"
+            db.commit()
+            return jsonify({"status": "rejected", "recommendation": _rec_to_dict(rec)})
+
+        rec.status = "accepted"
+        db.commit()
+
+        engine = AdsDecisionEngine(db)
+        executed, message = engine.execute_recommendation(rec)
+        return jsonify({
+            "status": rec.status,   # executed | failed | accepted (escrita off / ação manual)
+            "executed": executed,
+            "message": message,
+            "recommendation": _rec_to_dict(rec),
+        })
+    except Exception as e:
+        db.rollback()
+        return jsonify({"error": str(e)}), 500
     finally:
         db.close()

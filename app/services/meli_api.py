@@ -460,6 +460,66 @@ class MeliApiService:
             return rows
         return []
 
+    def update_product_ad_status(self, item_id: str, status: str):
+        """
+        ESCRITA no Product Ads: muda o status de um anúncio (paused/active).
+        Chamada SOMENTE pelo AdsDecisionEngine com ADS_WRITE_ENABLED=true.
+
+        O path exato de escrita não é público na doc — autodescoberta entre as
+        duas variantes conhecidas da família v2 (com e sem /marketplace),
+        cacheando a que funcionar em system_config.ads_write_path_prefix.
+        """
+        advertiser_id = self.get_advertiser_id()
+        if not advertiser_id:
+            return {"ok": False, "status_code": None, "body": "advertiser_id indisponível"}
+
+        from app.models.system_config import SystemConfig
+        db = self.db_session
+        local_session = False
+        if not db:
+            from app.core.database import SessionLocal
+            db = SessionLocal()
+            local_session = True
+
+        try:
+            prefixes = ["/advertising", "/marketplace/advertising"]
+            cached = db.query(SystemConfig).filter_by(key="ads_write_path_prefix").first()
+            if cached and cached.value in prefixes:
+                prefixes.remove(cached.value)
+                prefixes.insert(0, cached.value)
+
+            last = {"ok": False, "status_code": None, "body": None}
+            for prefix in prefixes:
+                endpoint = f"{prefix}/MLB/advertisers/{advertiser_id}/product_ads/ads/{item_id}"
+                response = self.request('PUT', endpoint, json_data={"status": status},
+                                        extra_headers={"Api-Version": "2"}, max_retries=1)
+                if response is None:
+                    last = {"ok": False, "status_code": None, "body": "sem resposta"}
+                    continue
+                if response.status_code in (200, 201, 204):
+                    if not cached:
+                        db.add(SystemConfig(key="ads_write_path_prefix", value=prefix, group="cache"))
+                    else:
+                        cached.value = prefix
+                    db.commit()
+                    body = None
+                    try:
+                        body = response.json()
+                    except Exception:
+                        pass
+                    logger.info(f"Product Ad {item_id} -> status '{status}' OK via {prefix}.")
+                    return {"ok": True, "status_code": response.status_code, "endpoint": endpoint, "body": body}
+                last = {"ok": False, "status_code": response.status_code, "body": response.text[:300]}
+                # 404/405 = path errado, tenta a próxima variante; outros erros abortam
+                if response.status_code not in (404, 405):
+                    break
+
+            logger.error(f"update_product_ad_status({item_id}, {status}) falhou: {last}")
+            return last
+        finally:
+            if local_session:
+                db.close()
+
     def get_shipping_cost(self, item_id: str, seller_id: str):
         """
         Fetches free shipping cost for the seller.
