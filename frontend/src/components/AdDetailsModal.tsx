@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { CompetitorManager } from "./hyper-ai/CompetitorManager";
 import { AdPerformanceCharts } from "./hyper-ai/AdPerformanceCharts";
-import { X, ExternalLink, Package, Activity, AlertTriangle, TrendingUp, TrendingDown, Clock, Truck, BarChart3, Info, DollarSign, ArrowRight, Edit3, PauseCircle, PlayCircle, Sparkles, LayoutDashboard, Wallet, Boxes, TestTube2, Award, Search, CheckCircle, ArrowUpCircle, Megaphone, ShieldCheck, FileText, Warehouse, Box, CheckCircle2, Trophy, Download, ChevronLeft, ChevronRight, Maximize2, Minimize2, Users, History, Calculator, Tag, Check, Target, ArrowUp, ArrowDown, Percent, Building2, Archive, RotateCcw, Trash2, RefreshCw, Zap, Calendar } from "lucide-react";
+import { X, ExternalLink, Package, Activity, AlertTriangle, TrendingUp, TrendingDown, Clock, Truck, BarChart3, Info, DollarSign, ArrowRight, Edit3, PauseCircle, PlayCircle, Sparkles, LayoutDashboard, Wallet, Boxes, TestTube2, Award, Search, CheckCircle, ArrowUpCircle, Megaphone, ShieldCheck, FileText, Warehouse, Box, CheckCircle2, Trophy, Download, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Maximize2, Minimize2, Users, History, Calculator, Tag, Check, Target, ArrowUp, ArrowDown, Percent, Building2, Archive, RotateCcw, Trash2, RefreshCw, Zap, Calendar } from "lucide-react";
 import { Ad } from "@/types";
 import { api } from "@/lib/api";
 import { PremiumLoader } from "@/components/ui/PremiumLoader";
@@ -55,6 +55,7 @@ export function AdDetailsModal({ adId, onClose }: Props) {
     const [targetMargin, setTargetMargin] = useState<number>(0);
     const [simulatedPrice, setSimulatedPrice] = useState<number>(0);
     const [showStrategy, setShowStrategy] = useState(false); // Added missing state
+    const [showFinanceDetail, setShowFinanceDetail] = useState(false); // Detalhamento financeiro (P&L do período)
     
     // Pricing Resolution State
     const [pricingResolution, setPricingResolution] = useState<any>(null);
@@ -389,6 +390,18 @@ export function AdDetailsModal({ adId, onClose }: Props) {
     const difalCost = Number(pricingResolution?.costs?.difal_value ?? 0);
     // Custo variável (embalagem/un.) vindo do backend
     const variableCost = Number((ad?.financials as any)?.variable_cost ?? 0);
+    // P&L do período (30 dias) — dados já no payload
+    const revenue30d = Number(ads?.total_revenue ?? 0);
+    const sales30d = Number(ad?.sales_30d ?? 0);
+    const unitMargin = Number(ad?.financials?.net_margin_value ?? ad?.margin_value ?? 0);
+    const adsSpend30d = Number(ads?.spend ?? 0);
+    const grossProfit30d = sales30d * unitMargin;          // lucro por unidade × unidades (Ads é custo de marketing, não entra na margem unitária)
+    const netProfit30d = grossProfit30d - adsSpend30d;     // lucro após investimento em Ads
+    const avgTicket30d = sales30d > 0 ? revenue30d / sales30d : 0;
+    const netProfitMargin30d = revenue30d > 0 ? (netProfit30d / revenue30d * 100) : 0;
+    // Totais históricos (lifetime)
+    const revenueTotal = Number((ad?.sold_quantity || 0) * (ad?.price || 0));
+    const salesTotal = Number(ad?.sold_quantity ?? 0);
 
     if (!activeTab) setActiveTab('overview');
     if (!adId) return null;
@@ -662,15 +675,15 @@ export function AdDetailsModal({ adId, onClose }: Props) {
 
                                                     {/* 1. HERO METRICS ROW - 3 Wide Cards, Compact Height */}
                                                     <div className="grid grid-cols-3 gap-2">
-                                                        {/* Revenue */}
-                                                        <Tooltip title="Receita" content="Faturamento total do anúncio (preço × quantidade vendida)" position="bottom">
+                                                        {/* Revenue (30d) */}
+                                                        <Tooltip title="Receita (30 dias)" content={<><strong>Faturamento dos últimos 30 dias</strong><br />Soma das vendas do período (ml_metrics_daily).<br />Total histórico: {fmtBRL((ad.sold_quantity || 0) * ad.price)}</>} position="bottom">
                                                             <div className="bg-[#0e0f14] p-3 rounded-lg border border-emerald-500/20 hover:border-emerald-500/40 transition-all cursor-help h-[72px] flex flex-col justify-between">
                                                                 <div className="flex justify-between items-center">
-                                                                    <p className="text-[10px] font-semibold text-emerald-400/80 uppercase tracking-wide">Receita</p>
+                                                                    <p className="text-[10px] font-semibold text-emerald-400/80 uppercase tracking-wide flex items-center gap-1.5">Receita <span className="text-[8px] px-1 py-px rounded bg-white/5 text-slate-400 font-bold tracking-normal">30D</span></p>
                                                                     <DollarSign size={12} className="text-emerald-500" />
                                                                 </div>
                                                                 <div className="text-lg font-bold text-white tabular-nums">
-                                                                    {((ad.sold_quantity || 0) * ad.price).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}
+                                                                    {(ads?.total_revenue || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}
                                                                 </div>
                                                                 <div className="h-0.5 w-full bg-slate-800/50 rounded-full overflow-hidden">
                                                                     <div className="h-full bg-emerald-500/60 w-full rounded-full"></div>
@@ -682,7 +695,7 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                         <Tooltip title="Ads (Total)" content={<><strong>Total investido em Product Ads</strong><br />Gasto real por item nos últimos {ads?.period_days || 30} dias (fonte: ml_ads_item_daily)</>} position="bottom">
                                                             <div className="bg-[#0e0f14] p-3 rounded-lg border border-blue-500/20 hover:border-blue-500/40 transition-all cursor-help h-[72px] flex flex-col justify-between">
                                                                 <div className="flex justify-between items-center">
-                                                                    <p className="text-[10px] font-semibold text-blue-400/80 uppercase tracking-wide">Ads Total</p>
+                                                                    <p className="text-[10px] font-semibold text-blue-400/80 uppercase tracking-wide flex items-center gap-1.5">Ads Total <span className="text-[8px] px-1 py-px rounded bg-white/5 text-slate-400 font-bold tracking-normal">30D</span></p>
                                                                     <Megaphone size={12} className="text-blue-500" />
                                                                 </div>
                                                                 <div className={`text-lg font-bold tabular-nums ${adsHasData ? 'text-blue-300' : 'text-slate-400'}`}>
@@ -698,7 +711,7 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                         <Tooltip title="Ads Sales" content={<><strong>Receita atribuída a Ads</strong><br />Vendas geradas por Product Ads nos últimos {ads?.period_days || 30} dias{ads?.units ? ` · ${ads.units} un.` : ''}</>} position="bottom">
                                                             <div className="bg-[#0e0f14] p-3 rounded-lg border border-purple-500/20 hover:border-purple-500/40 transition-all cursor-help h-[72px] flex flex-col justify-between">
                                                                 <div className="flex justify-between items-center">
-                                                                    <p className="text-[10px] font-semibold text-purple-400/80 uppercase tracking-wide">Ads Sales</p>
+                                                                    <p className="text-[10px] font-semibold text-purple-400/80 uppercase tracking-wide flex items-center gap-1.5">Ads Sales <span className="text-[8px] px-1 py-px rounded bg-white/5 text-slate-400 font-bold tracking-normal">30D</span></p>
                                                                     <Target size={12} className="text-purple-500" />
                                                                 </div>
                                                                 <div className={`text-lg font-bold tabular-nums ${adsHasData && (ads?.ads_revenue || 0) > 0 ? 'text-purple-300' : 'text-slate-400'}`}>
@@ -709,6 +722,69 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                                 </div>
                                                             </div>
                                                         </Tooltip>
+                                                    </div>
+
+                                                    {/* 1.5 DETALHAMENTO FINANCEIRO — P&L do período (30d) + totais históricos */}
+                                                    <div className="rounded-lg border border-white/5 bg-[#0e0f14] overflow-hidden">
+                                                        <button
+                                                            onClick={() => setShowFinanceDetail(v => !v)}
+                                                            className="w-full flex items-center justify-between px-3 py-2 hover:bg-white/[0.03] transition-colors cursor-pointer"
+                                                        >
+                                                            <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400 flex items-center gap-2">
+                                                                <BarChart3 size={12} className="text-emerald-500" /> Detalhamento do período <span className="text-[8px] px-1 py-px rounded bg-white/5 text-slate-500 font-bold tracking-normal">30D</span>
+                                                            </span>
+                                                            <div className="flex items-center gap-3">
+                                                                <span className="text-[11px] text-slate-500">Lucro líq.</span>
+                                                                <span className={`text-xs font-bold tabular-nums ${netProfit30d >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                                    {fmtBRL(netProfit30d)}
+                                                                </span>
+                                                                {showFinanceDetail ? <ChevronUp size={14} className="text-slate-500" /> : <ChevronDown size={14} className="text-slate-500" />}
+                                                            </div>
+                                                        </button>
+
+                                                        {showFinanceDetail && (
+                                                            <div className="px-3 pb-3 pt-1 animate-in fade-in slide-in-from-top-1 duration-200 space-y-3">
+                                                                {/* P&L cards */}
+                                                                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                                                    <div className="bg-[#09090b] rounded-lg p-2.5 border border-emerald-500/15">
+                                                                        <p className="text-[9px] uppercase tracking-wide text-emerald-400/70 font-bold">Receita 30d</p>
+                                                                        <p className="text-sm font-bold text-white tabular-nums mt-1">{fmtBRL(revenue30d)}</p>
+                                                                    </div>
+                                                                    <div className="bg-[#09090b] rounded-lg p-2.5 border border-white/5">
+                                                                        <p className="text-[9px] uppercase tracking-wide text-slate-400 font-bold">Vendas 30d</p>
+                                                                        <p className="text-sm font-bold text-white tabular-nums mt-1">{sales30d} un.</p>
+                                                                        <p className="text-[9px] text-slate-500 mt-0.5">Ticket {fmtBRL(avgTicket30d)}</p>
+                                                                    </div>
+                                                                    <div className="bg-[#09090b] rounded-lg p-2.5 border border-blue-500/15">
+                                                                        <p className="text-[9px] uppercase tracking-wide text-blue-400/70 font-bold">Ads 30d</p>
+                                                                        <p className="text-sm font-bold text-blue-300 tabular-nums mt-1">-{fmtBRL(adsSpend30d)}</p>
+                                                                        <p className="text-[9px] text-slate-500 mt-0.5">TACOS {ads?.tacos != null ? `${ads.tacos.toFixed(2)}%` : '—'}</p>
+                                                                    </div>
+                                                                    <div className={`bg-[#09090b] rounded-lg p-2.5 border ${netProfit30d >= 0 ? 'border-emerald-500/30' : 'border-rose-500/30'}`}>
+                                                                        <p className="text-[9px] uppercase tracking-wide text-slate-400 font-bold">Lucro líquido 30d</p>
+                                                                        <p className={`text-sm font-bold tabular-nums mt-1 ${netProfit30d >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{fmtBRL(netProfit30d)}</p>
+                                                                        <p className="text-[9px] text-slate-500 mt-0.5">{netProfitMargin30d.toFixed(1)}% da receita</p>
+                                                                    </div>
+                                                                </div>
+
+                                                                {/* DRE resumida */}
+                                                                <div className="bg-[#09090b] rounded-lg p-3 border border-white/5 space-y-1.5 text-[11px] font-mono">
+                                                                    <div className="flex justify-between"><span className="text-slate-400">Receita (30d)</span><span className="text-emerald-400 tabular-nums">{fmtBRL(revenue30d)}</span></div>
+                                                                    <div className="flex justify-between"><span className="text-slate-400">Margem de contribuição (30d)</span><span className="text-slate-200 tabular-nums">{fmtBRL(grossProfit30d)}</span></div>
+                                                                    <div className="flex justify-between"><span className="text-slate-400">(−) Investimento em Ads</span><span className="text-rose-400 tabular-nums">-{fmtBRL(adsSpend30d)}</span></div>
+                                                                    <div className="flex justify-between pt-1.5 border-t border-white/10"><span className="text-slate-300 font-bold">(=) Lucro líquido (30d)</span><span className={`font-bold tabular-nums ${netProfit30d >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{fmtBRL(netProfit30d)}</span></div>
+                                                                    <p className="text-[9px] text-slate-600 pt-1">Margem de contribuição = vendas × margem líquida por unidade (economics atuais). Ads é custo de marketing, subtraído fora da margem unitária.</p>
+                                                                </div>
+
+                                                                {/* Totais históricos */}
+                                                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-slate-500">
+                                                                    <span className="uppercase tracking-wide font-bold text-slate-600">Histórico total:</span>
+                                                                    <span>Receita <span className="text-slate-300 font-semibold">{fmtBRL(revenueTotal)}</span></span>
+                                                                    <span>Vendas <span className="text-slate-300 font-semibold">{salesTotal} un.</span></span>
+                                                                    <span>Visitas <span className="text-slate-300 font-semibold">{(ad.total_visits || 0).toLocaleString('pt-BR')}</span></span>
+                                                                </div>
+                                                            </div>
+                                                        )}
                                                     </div>
 
                                                     {/* 2. COMPACT BREAKDOWN GRID */}
