@@ -15,7 +15,8 @@ import {
     Settings,
     LogOut,
     Brain,
-    Wallet
+    Wallet,
+    Megaphone
 } from "lucide-react";
 import { useState, useEffect } from "react";
 
@@ -45,6 +46,7 @@ export function Sidebar({ isCollapsed, toggleSidebar }: SidebarProps) {
             icon: BarChart2,
             items: [
                 { name: "Analytics", href: "/perform/analytics", icon: BarChart2 },
+                { name: "Ads Intelligence", href: "/ads-intelligence", icon: Megaphone },
                 { name: "Métricas", href: "/perform/metrics", icon: BarChart2, disabled: true },
                 { name: "Regras", href: "/perform/rules", icon: BarChart2, disabled: true }
             ]

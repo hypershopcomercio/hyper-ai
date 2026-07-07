@@ -26,6 +26,58 @@ logger = logging.getLogger(__name__)
 TZ_BR = timezone(timedelta(hours=-3))
 
 
+def _suggest_action(classification, spend, ads_revenue, acos, margin_percent, days_active, period_days):
+    """
+    Primeira camada do motor de decisão de Ads: sugestão read-only por item.
+    NUNCA executa nada no ML — apenas recomenda com justificativa e impacto,
+    para validação humana (níveis de autonomia maiores virão depois).
+    """
+    # Projeção mensal do gasto no ritmo atual
+    monthly_spend = (spend / days_active * 30) if days_active > 0 else 0.0
+
+    if classification == "queimando":
+        return {
+            "code": "pausar",
+            "label": "Pausar Ads deste item",
+            "reason": f"Gastou R${spend:.2f} em {days_active} dia(s) sem NENHUMA venda via Ads no período.",
+            "impact": f"Economia estimada de R${monthly_spend:.2f}/mês",
+        }
+    if classification == "prejuizo":
+        loss = ads_revenue * (margin_percent / 100.0) - spend if margin_percent else -spend
+        return {
+            "code": "reduzir_ou_pausar",
+            "label": "Reduzir lance/verba ou pausar",
+            "reason": f"ACOS {acos:.1f}% >= margem {margin_percent:.1f}% — cada venda via Ads dá prejuízo (resultado no período: R${loss:.2f}).",
+            "impact": f"Estancar perda de ~R${abs(loss) / max(days_active, 1) * 30:.2f}/mês",
+        }
+    if classification == "atencao":
+        if margin_percent is not None:
+            reason = f"ACOS {acos:.1f}% consome mais de 70% da margem ({margin_percent:.1f}%) — lucro via Ads quase zerado."
+        else:
+            reason = f"ACOS {acos:.1f}% elevado e margem do produto desconhecida — cadastre o custo para avaliar."
+        return {
+            "code": "monitorar",
+            "label": "Monitorar de perto / reduzir lance",
+            "reason": reason,
+            "impact": "Risco de virar prejuízo com pequena piora de CPC",
+        }
+    if classification == "escalar":
+        headroom = (margin_percent - acos) if (margin_percent and acos is not None) else None
+        return {
+            "code": "aumentar",
+            "label": "Aumentar investimento",
+            "reason": (f"ACOS {acos:.1f}% bem abaixo da margem {margin_percent:.1f}% — folga de {headroom:.1f}pp para escalar."
+                       if headroom is not None else f"ACOS {acos:.1f}% baixo com vendas consistentes."),
+            "impact": f"Receita via Ads atual R${ads_revenue:.2f} em {period_days}d com espaço para crescer",
+        }
+    return {
+        "code": "manter",
+        "label": "Manter como está",
+        "reason": "ACOS confortável dentro da margem.",
+        "impact": None,
+    }
+
+
 def _classify(spend, ads_revenue, acos, margin_percent):
     if spend > 0 and ads_revenue <= 0:
         return "queimando"
@@ -144,6 +196,8 @@ def ads_intelligence_overview():
                 "margin_percent": margin_percent,
                 "ads_profit": ads_profit,
                 "classification": classification,
+                "action": _suggest_action(classification, spend, ads_revenue, acos,
+                                          margin_percent, int(r.days_active or 0), days),
             })
 
         # Worst offenders first: queimando/prejuizo by spend desc
