@@ -460,19 +460,31 @@ class MeliApiService:
             return rows
         return []
 
+    def get_product_ad_item(self, item_id: str):
+        """
+        Lê o estado de um item no Product Ads (status, campaign_id, ad_group_id).
+        Path CONFIRMADO em produção (2026-07-08): /advertising/product_ads/items/{MLB}.
+        """
+        response = self.request('GET', f"/advertising/product_ads/items/{item_id}",
+                                extra_headers={"Api-Version": "2"}, max_retries=1)
+        if response is not None and response.status_code == 200:
+            try:
+                return response.json()
+            except Exception:
+                return None
+        return None
+
     def update_product_ad_status(self, item_id: str, status: str):
         """
         ESCRITA no Product Ads: muda o status de um anúncio (paused/active).
         Chamada SOMENTE pelo AdsDecisionEngine com ADS_WRITE_ENABLED=true.
 
-        O path exato de escrita não é público na doc — autodescoberta entre as
-        duas variantes conhecidas da família v2 (com e sem /marketplace),
-        cacheando a que funcionar em system_config.ads_write_path_prefix.
+        Descoberto em produção (2026-07-08): o recurso do item vive em
+        /advertising/product_ads/items/{MLB} (GET 200). O PUT nesse path retorna
+        403 PolicyAgent enquanto o app não tiver permissão de escrita em Ads —
+        o erro é devolvido íntegro para diagnóstico. Variante por campanha
+        tentada como fallback (autodescoberta cacheada em system_config).
         """
-        advertiser_id = self.get_advertiser_id()
-        if not advertiser_id:
-            return {"ok": False, "status_code": None, "body": "advertiser_id indisponível"}
-
         from app.models.system_config import SystemConfig
         db = self.db_session
         local_session = False
@@ -482,15 +494,21 @@ class MeliApiService:
             local_session = True
 
         try:
-            prefixes = ["/advertising", "/marketplace/advertising"]
-            cached = db.query(SystemConfig).filter_by(key="ads_write_path_prefix").first()
-            if cached and cached.value in prefixes:
-                prefixes.remove(cached.value)
-                prefixes.insert(0, cached.value)
+            # Campaign_id para a variante por campanha
+            info = self.get_product_ad_item(item_id)
+            campaign_id = info.get("campaign_id") if info else None
+
+            candidates = [("items", f"/advertising/product_ads/items/{item_id}")]
+            if campaign_id:
+                candidates.append(("campaign_items",
+                                   f"/advertising/product_ads/campaigns/{campaign_id}/items/{item_id}"))
+
+            cached = db.query(SystemConfig).filter_by(key="ads_write_path_variant").first()
+            if cached and cached.value:
+                candidates.sort(key=lambda c: 0 if c[0] == cached.value else 1)
 
             last = {"ok": False, "status_code": None, "body": None}
-            for prefix in prefixes:
-                endpoint = f"{prefix}/MLB/advertisers/{advertiser_id}/product_ads/ads/{item_id}"
+            for variant, endpoint in candidates:
                 response = self.request('PUT', endpoint, json_data={"status": status},
                                         extra_headers={"Api-Version": "2"}, max_retries=1)
                 if response is None:
@@ -498,19 +516,20 @@ class MeliApiService:
                     continue
                 if response.status_code in (200, 201, 204):
                     if not cached:
-                        db.add(SystemConfig(key="ads_write_path_prefix", value=prefix, group="cache"))
+                        db.add(SystemConfig(key="ads_write_path_variant", value=variant, group="cache"))
                     else:
-                        cached.value = prefix
+                        cached.value = variant
                     db.commit()
                     body = None
                     try:
                         body = response.json()
                     except Exception:
                         pass
-                    logger.info(f"Product Ad {item_id} -> status '{status}' OK via {prefix}.")
+                    logger.info(f"Product Ad {item_id} -> status '{status}' OK via variante '{variant}'.")
                     return {"ok": True, "status_code": response.status_code, "endpoint": endpoint, "body": body}
-                last = {"ok": False, "status_code": response.status_code, "body": response.text[:300]}
-                # 404/405 = path errado, tenta a próxima variante; outros erros abortam
+                last = {"ok": False, "status_code": response.status_code, "body": response.text[:300], "endpoint": endpoint}
+                # 404/405 = path errado, tenta próxima variante; 403 PolicyAgent
+                # (falta permissão de escrita no app) e demais erros abortam
                 if response.status_code not in (404, 405):
                     break
 
