@@ -39,7 +39,21 @@ interface AdsItem {
     margin_percent: number | null;
     ads_profit: number | null;
     classification: string;
+    lifecycle_stage: string | null;
+    max_acos: number | null;
+    net_margin_pct: number | null;
     action: AdsAction;
+}
+
+interface FinanceBlock {
+    fixed_monthly: number;
+    revenue_30d: number;
+    fixed_burden_pct: number | null;
+    target_net_pct: number;
+    otb_value: number | null;
+    complete: boolean;
+    avg_contribution_pct: number | null;
+    global_net_pct: number | null;
 }
 
 interface Recommendation {
@@ -59,6 +73,7 @@ interface Overview {
     has_data: boolean;
     message?: string;
     period_days?: number;
+    finance?: FinanceBlock;
     summary: {
         total_spend: number;
         total_ads_revenue: number;
@@ -226,6 +241,42 @@ export default function AdsIntelligencePage() {
                 </div>
             </div>
 
+            {/* Equação da Saúde Financeira */}
+            {data.finance && data.finance.complete ? (
+                <div className="bg-[#121217] border border-white/5 rounded-2xl p-5 flex flex-wrap items-center gap-x-6 gap-y-3">
+                    <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold shrink-0">Equação da Saúde</div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 font-mono text-sm">
+                        <span className="text-white" title="Margem de contribuição média dos itens com Ads (ponderada pela receita via Ads)">
+                            Contribuição <strong>{data.finance.avg_contribution_pct != null ? `${data.finance.avg_contribution_pct.toFixed(1)}%` : '—'}</strong>
+                        </span>
+                        <span className="text-slate-600">−</span>
+                        <span className="text-violet-300" title="ACOS global do período">
+                            Ads <strong>{s.global_acos != null ? `${s.global_acos.toFixed(1)}%` : '—'}</strong>
+                        </span>
+                        <span className="text-slate-600">−</span>
+                        <span className="text-amber-300" title={`Custos fixos R$ ${data.finance.fixed_monthly.toLocaleString('pt-BR')} /mês ÷ receita 30d R$ ${data.finance.revenue_30d.toLocaleString('pt-BR')}`}>
+                            Fixos <strong>{data.finance.fixed_burden_pct?.toFixed(1)}%</strong>
+                        </span>
+                        <span className="text-slate-600">=</span>
+                        <span className={`font-black ${data.finance.global_net_pct != null && data.finance.global_net_pct >= data.finance.target_net_pct ? 'text-emerald-400' : data.finance.global_net_pct != null && data.finance.global_net_pct >= 0 ? 'text-yellow-400' : 'text-red-400'}`}>
+                            Líquida Real {data.finance.global_net_pct != null ? `${data.finance.global_net_pct.toFixed(1)}%` : '—'}
+                        </span>
+                        <span className="text-[11px] text-slate-500">(meta p/ crescer: {data.finance.target_net_pct.toFixed(0)}%)</span>
+                    </div>
+                    {data.finance.otb_value != null && (
+                        <div className="ml-auto text-[11px] text-slate-500" title="Open-to-Buy: verba disponível para recompra de estoque. Com OTB zerado o motor não recomenda escalar Ads.">
+                            OTB (recompra): <span className={data.finance.otb_value > 0 ? 'text-emerald-400 font-bold' : 'text-red-400 font-bold'}>{fmtBRL(data.finance.otb_value)}</span>
+                        </div>
+                    )}
+                </div>
+            ) : (
+                <div className="bg-amber-500/5 border border-amber-500/20 rounded-2xl p-4 text-xs text-amber-300/90">
+                    ⚠️ <strong>Custos fixos não cadastrados</strong> — o motor está usando só a margem de contribuição.
+                    Cadastre as contas da empresa em <a href="/financial/settings" className="underline font-bold">Financeiro → Custos Fixos</a> para
+                    as decisões considerarem a margem líquida REAL (contribuição − Ads − fixos ≥ meta de crescimento).
+                </div>
+            )}
+
             {/* Recommendations Queue (Nível 1) */}
             {(recs.length > 0 || recFeedback) && (
                 <div className="bg-violet-500/[0.04] border border-violet-500/20 rounded-2xl p-6">
@@ -353,6 +404,7 @@ export default function AdsIntelligencePage() {
                                 <th className="px-4 py-3 text-right">ACOS</th>
                                 <th className="px-4 py-3 text-right">ROAS</th>
                                 <th className="px-4 py-3 text-right">Margem</th>
+                                <th className="px-4 py-3 text-right" title="Margem líquida REAL: contribuição − ACOS − custos fixos">Líq. Real</th>
                                 <th className="px-4 py-3 text-right">Lucro via Ads</th>
                                 <th className="px-4 py-3">Ação Sugerida</th>
                             </tr>
@@ -399,6 +451,13 @@ export default function AdsIntelligencePage() {
                                         </td>
                                         <td className="px-4 py-3 text-right font-mono text-slate-300">{item.roas != null ? `${item.roas.toFixed(1)}x` : '—'}</td>
                                         <td className="px-4 py-3 text-right font-mono text-slate-300">{item.margin_percent != null ? `${item.margin_percent.toFixed(1)}%` : <span className="text-slate-600" title="Cadastre o custo do produto">?</span>}</td>
+                                        <td className="px-4 py-3 text-right font-mono" title={item.max_acos != null ? `Teto de ACOS deste item (${item.lifecycle_stage}): ${item.max_acos.toFixed(1)}%` : undefined}>
+                                            {item.net_margin_pct != null ? (
+                                                <span className={item.net_margin_pct >= (data.finance?.target_net_pct ?? 8) ? 'text-emerald-400' : item.net_margin_pct >= 0 ? 'text-yellow-400' : 'text-red-400'}>
+                                                    {item.net_margin_pct.toFixed(1)}%
+                                                </span>
+                                            ) : <span className="text-slate-600">—</span>}
+                                        </td>
                                         <td className="px-4 py-3 text-right font-mono">
                                             {item.ads_profit != null ? (
                                                 <span className={item.ads_profit >= 0 ? 'text-emerald-400' : 'text-red-400'}>{fmtBRL(item.ads_profit)}</span>

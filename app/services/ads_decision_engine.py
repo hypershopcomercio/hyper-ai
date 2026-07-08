@@ -42,14 +42,120 @@ ACOS_TARGET_BY_STAGE = {
 
 EXECUTABLE_ACTIONS = {"pausar"}   # única ação executável automaticamente no nível 1
 
+# Meta de margem LÍQUIDA pós-tudo (contribuição - Ads - custos fixos) para
+# crescimento saudável em marketplace. 8% = default; configurável via
+# system_config key 'ads_target_net_margin'. Racional: <5% qualquer soluço
+# (devolução, atraso de repasse) quebra o ciclo de recompra; >15% em fase de
+# crescimento normalmente significa subinvestir em Ads/estoque.
+DEFAULT_TARGET_NET_MARGIN = 8.0
+SCALE_HEADROOM_FACTOR = 0.6       # "aumentar" exige ACOS <= 60% do teto (folga p/ crescer sem estourar)
+
+
+def get_finance_context(db) -> dict:
+    """
+    Fotografia financeira da empresa usada nas decisões de Ads:
+      fixed_burden_pct — quanto da receita os custos fixos consomem hoje
+      target_net_pct   — meta de margem líquida pós-tudo (crescimento saudável)
+      otb_value        — verba disponível para recompra (guard: não escalar Ads
+                         de item que não conseguimos reabastecer)
+      complete=False   — sem contas fixas cadastradas ou sem receita: o motor
+                         cai no modo antigo (bandas sobre a margem de contribuição).
+    """
+    from app.models.financial import FixedCost
+    from app.models.ml_order import MlOrder, MlOrderItem
+    from app.models.system_config import SystemConfig
+    from sqlalchemy import func as sqlfunc
+
+    ctx = {
+        "fixed_monthly": 0.0,
+        "revenue_30d": 0.0,
+        "fixed_burden_pct": None,
+        "target_net_pct": DEFAULT_TARGET_NET_MARGIN,
+        "otb_value": None,
+        "complete": False,
+    }
+    try:
+        fixed_monthly = float(db.query(sqlfunc.sum(FixedCost.amount)).filter(
+            FixedCost.active == True  # noqa: E712
+        ).scalar() or 0)
+
+        cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+        revenue_30d = float(db.query(
+            sqlfunc.sum(MlOrderItem.quantity * MlOrderItem.unit_price)
+        ).join(MlOrder, MlOrder.ml_order_id == MlOrderItem.ml_order_id).filter(
+            MlOrder.date_created >= cutoff,
+            MlOrder.status.in_(["paid", "shipped", "delivered"]),
+        ).scalar() or 0)
+
+        try:
+            sc = db.query(SystemConfig).filter_by(key="ads_target_net_margin").first()
+            if sc and sc.value:
+                ctx["target_net_pct"] = float(sc.value)
+        except Exception:
+            pass  # config opcional — mantém default
+
+        ctx["fixed_monthly"] = round(fixed_monthly, 2)
+        ctx["revenue_30d"] = round(revenue_30d, 2)
+        if fixed_monthly > 0 and revenue_30d > 0:
+            ctx["fixed_burden_pct"] = round(fixed_monthly / revenue_30d * 100, 2)
+            ctx["complete"] = True
+
+        try:
+            from app.services.financial_service import FinancialService
+            otb = FinancialService(db).calculate_otb()
+            ctx["otb_value"] = round(float(otb.get("otb_value") or 0), 2)
+        except Exception as e:
+            logger.warning(f"OTB indisponível para contexto de Ads (não-fatal): {e}")
+    except Exception as e:
+        logger.warning(f"Contexto financeiro indisponível (não-fatal): {e}")
+    return ctx
+
+
+def max_acos_for(contribution_pct, finance_ctx, stage: str = "maturidade"):
+    """
+    Teto de ACOS que ainda entrega a meta de crescimento:
+      teto = margem de contribuição - custos fixos % - meta líquida %
+    Fases lançamento/liquidação abrem mão da meta líquida (investem o lucro
+    em ranking/giro), mas nunca do break-even pós-fixos.
+    Retorna None quando não há dados financeiros completos.
+    """
+    if not finance_ctx or not finance_ctx.get("complete") or contribution_pct is None:
+        return None
+    burden = finance_ctx["fixed_burden_pct"]
+    target = finance_ctx["target_net_pct"]
+    if stage in ("lancamento", "liquidacao"):
+        ceiling = contribution_pct - burden
+    else:
+        ceiling = contribution_pct - burden - target
+    return round(max(0.0, ceiling), 2)
+
 
 def ads_write_enabled() -> bool:
     return os.getenv("ADS_WRITE_ENABLED", "false").lower() == "true"
 
 
-def _classify(spend, ads_revenue, acos, margin_percent):
+def _classify(spend, ads_revenue, acos, margin_percent, max_acos=None, fixed_burden_pct=None):
+    """
+    margin_percent = margem de CONTRIBUIÇÃO (pós comissão/frete/imposto/custo,
+    ANTES de Ads e custos fixos). Com dados financeiros (max_acos), as bandas
+    são ancoradas na margem LÍQUIDA real; sem eles, cai nas bandas antigas.
+    """
     if spend > 0 and ads_revenue <= 0:
         return "queimando"
+
+    # --- Modo finance-aware: teto de ACOS = contribuição - fixos - meta ---
+    if max_acos is not None and acos is not None and margin_percent:
+        if acos >= margin_percent:
+            return "prejuizo"          # perde dinheiro antes mesmo dos fixos
+        if fixed_burden_pct is not None and acos >= margin_percent - fixed_burden_pct:
+            return "prejuizo"          # líquida real negativa (fixos não fecham)
+        if acos >= max_acos:
+            return "atencao"           # paga as contas mas come a meta de crescimento
+        if acos <= max_acos * SCALE_HEADROOM_FACTOR:
+            return "escalar"
+        return "saudavel"
+
+    # --- Fallback: bandas sobre a margem de contribuição ---
     if margin_percent is not None and margin_percent > 0 and acos is not None:
         if acos >= margin_percent:
             return "prejuizo"
@@ -68,9 +174,16 @@ def _classify(spend, ads_revenue, acos, margin_percent):
     return "saudavel"
 
 
-def _suggest_action(classification, spend, ads_revenue, acos, margin_percent, days_active, period_days):
+def _suggest_action(classification, spend, ads_revenue, acos, margin_percent, days_active, period_days,
+                    max_acos=None, fixed_burden_pct=None, target_net_pct=None):
     """Sugestão read-only por item (nível 0 — usada pela página Ads Intelligence)."""
     monthly_spend = (spend / days_active * 30) if days_active > 0 else 0.0
+    finance_aware = max_acos is not None and fixed_burden_pct is not None
+
+    # Margem líquida REAL do item vendido via Ads: contribuição - ACOS - fixos
+    net_pct = None
+    if finance_aware and margin_percent is not None and acos is not None:
+        net_pct = round(margin_percent - acos - fixed_burden_pct, 2)
 
     if classification == "queimando":
         return {
@@ -81,14 +194,22 @@ def _suggest_action(classification, spend, ads_revenue, acos, margin_percent, da
         }
     if classification == "prejuizo":
         loss = ads_revenue * (margin_percent / 100.0) - spend if margin_percent else -spend
+        if net_pct is not None and acos < (margin_percent or 0):
+            reason = (f"Margem líquida REAL {net_pct:.1f}% negativa: contribuição {margin_percent:.1f}% "
+                      f"− ACOS {acos:.1f}% − custos fixos {fixed_burden_pct:.1f}% — a venda existe mas não paga as contas.")
+        else:
+            reason = f"ACOS {acos:.1f}% >= margem {margin_percent:.1f}% — cada venda via Ads dá prejuízo (resultado no período: R${loss:.2f})."
         return {
             "code": "reduzir_ou_pausar",
             "label": "Reduzir lance/verba ou pausar",
-            "reason": f"ACOS {acos:.1f}% >= margem {margin_percent:.1f}% — cada venda via Ads dá prejuízo (resultado no período: R${loss:.2f}).",
+            "reason": reason,
             "impact": f"Estancar perda de ~R${abs(loss) / max(days_active, 1) * 30:.2f}/mês",
         }
     if classification == "atencao":
-        if margin_percent is not None:
+        if finance_aware and net_pct is not None:
+            reason = (f"ACOS {acos:.1f}% acima do teto de {max_acos:.1f}% — sobra líquida de {net_pct:.1f}%, "
+                      f"abaixo da meta de {target_net_pct:.1f}% para crescer com saúde.")
+        elif margin_percent is not None:
             reason = f"ACOS {acos:.1f}% consome mais de 70% da margem ({margin_percent:.1f}%) — lucro via Ads quase zerado."
         else:
             reason = f"ACOS {acos:.1f}% elevado e margem do produto desconhecida — cadastre o custo para avaliar."
@@ -99,18 +220,23 @@ def _suggest_action(classification, spend, ads_revenue, acos, margin_percent, da
             "impact": "Risco de virar prejuízo com pequena piora de CPC",
         }
     if classification == "escalar":
-        headroom = (margin_percent - acos) if (margin_percent and acos is not None) else None
+        if finance_aware and net_pct is not None:
+            reason = (f"ACOS {acos:.1f}% com teto de {max_acos:.1f}% — líquida real de {net_pct:.1f}% "
+                      f"já descontando custos fixos ({fixed_burden_pct:.1f}%) e acima da meta ({target_net_pct:.1f}%).")
+        else:
+            headroom = (margin_percent - acos) if (margin_percent and acos is not None) else None
+            reason = (f"ACOS {acos:.1f}% bem abaixo da margem {margin_percent:.1f}% — folga de {headroom:.1f}pp para escalar."
+                      if headroom is not None else f"ACOS {acos:.1f}% baixo com vendas consistentes.")
         return {
             "code": "aumentar",
             "label": "Aumentar investimento",
-            "reason": (f"ACOS {acos:.1f}% bem abaixo da margem {margin_percent:.1f}% — folga de {headroom:.1f}pp para escalar."
-                       if headroom is not None else f"ACOS {acos:.1f}% baixo com vendas consistentes."),
+            "reason": reason,
             "impact": f"Receita via Ads atual R${ads_revenue:.2f} em {period_days}d com espaço para crescer",
         }
     return {
         "code": "manter",
         "label": "Manter como está",
-        "reason": "ACOS confortável dentro da margem.",
+        "reason": ("Líquida real dentro da meta." if finance_aware else "ACOS confortável dentro da margem."),
         "impact": None,
     }
 
@@ -149,33 +275,47 @@ class AdsDecisionEngine:
     # ---------- Geração de recomendações ----------
 
     def _decide_action(self, classification, stage, significant, spend, ads_revenue,
-                       acos, margin_percent, days_active, period_days, days_of_stock):
+                       acos, margin_percent, days_active, period_days, days_of_stock,
+                       max_acos=None, finance_ctx=None):
         """
         Converte o diagnóstico em UMA recomendação acionável (ou None), aplicando
-        os guardrails de fase, significância e estoque.
+        os guardrails de fase, significância, estoque e caixa de recompra (OTB).
         """
         if not significant:
             return None  # aguardar dados
+
+        fc = finance_ctx or {}
+        burden = fc.get("fixed_burden_pct") if fc.get("complete") else None
+        target = fc.get("target_net_pct") if fc.get("complete") else None
 
         if classification == "queimando":
             if stage == "lancamento":
                 return None  # lançamento compra ranking; tolerar
             return _suggest_action(classification, spend, ads_revenue, acos,
-                                   margin_percent, days_active, period_days)
+                                   margin_percent, days_active, period_days,
+                                   max_acos=max_acos, fixed_burden_pct=burden, target_net_pct=target)
 
         if classification == "prejuizo":
             # Em lançamento só recomenda se estourar 20% ALÉM da margem
             if stage == "lancamento" and margin_percent and acos is not None and acos < margin_percent * 1.2:
                 return None
             return _suggest_action(classification, spend, ads_revenue, acos,
-                                   margin_percent, days_active, period_days)
+                                   margin_percent, days_active, period_days,
+                                   max_acos=max_acos, fixed_burden_pct=burden, target_net_pct=target)
 
         if classification == "escalar":
             # Guard de estoque: não escalar com risco de ruptura
             if days_of_stock is not None and days_of_stock < STOCK_GUARD_MIN_DAYS:
                 return None
+            # Guard de caixa: escalar Ads gera venda que exige recompra — sem
+            # OTB (verba de compra disponível), crescer aqui quebra o ciclo.
+            otb = fc.get("otb_value")
+            if otb is not None and otb <= 0:
+                logger.info(f"Escalar bloqueado por OTB<=0 (sem verba de recompra).")
+                return None
             action = _suggest_action(classification, spend, ads_revenue, acos,
-                                     margin_percent, days_active, period_days)
+                                     margin_percent, days_active, period_days,
+                                     max_acos=max_acos, fixed_burden_pct=burden, target_net_pct=target)
             if stage == "liquidacao":
                 action["reason"] += " Item em liquidação (estoque alto) — acelerar giro."
             return action
@@ -217,6 +357,13 @@ class AdsDecisionEngine:
             MlAdsItemDaily.item_id, func.sum(MlAdsItemDaily.units_quantity)
         ).filter(MlAdsItemDaily.item_id.in_(item_ids)).group_by(MlAdsItemDaily.item_id).all())
 
+        finance_ctx = get_finance_context(self.db)
+        if finance_ctx["complete"]:
+            logger.info(f"Motor de Ads com contexto financeiro: fixos R${finance_ctx['fixed_monthly']:.2f}/mês "
+                        f"= {finance_ctx['fixed_burden_pct']:.1f}% da receita 30d; meta líquida {finance_ctx['target_net_pct']:.1f}%.")
+        else:
+            logger.info("Motor de Ads SEM contexto financeiro (cadastre custos fixos) — usando bandas de contribuição.")
+
         pending = self.db.query(AdsRecommendation).filter(
             AdsRecommendation.status == "pending"
         ).all()
@@ -248,13 +395,17 @@ class AdsDecisionEngine:
             days_of_stock = float(ad.days_of_stock) if (ad and ad.days_of_stock is not None) else None
             acos = round(spend / ads_revenue * 100, 2) if ads_revenue > 0 else None
 
-            classification = _classify(spend, ads_revenue, acos, margin_percent)
             stage = self.infer_lifecycle(ad, int(units_alltime.get(r.item_id) or 0))
+            m_acos = max_acos_for(margin_percent, finance_ctx, stage)
+            burden = finance_ctx["fixed_burden_pct"] if finance_ctx["complete"] else None
+            classification = _classify(spend, ads_revenue, acos, margin_percent,
+                                       max_acos=m_acos, fixed_burden_pct=burden)
             significant = clicks >= MIN_CLICKS_SIGNIFICANCE or spend >= MIN_SPEND_SIGNIFICANCE
 
             action = self._decide_action(classification, stage, significant, spend,
                                          ads_revenue, acos, margin_percent,
-                                         days_active, days, days_of_stock)
+                                         days_active, days, days_of_stock,
+                                         max_acos=m_acos, finance_ctx=finance_ctx)
             if not action:
                 continue
 
@@ -277,6 +428,10 @@ class AdsDecisionEngine:
                     "clicks": clicks, "acos": acos, "margin_percent": margin_percent,
                     "days_active": days_active, "days_of_stock": days_of_stock,
                     "title": ad.title if ad else None, "sku": ad.sku if ad else None,
+                    "max_acos": m_acos,
+                    "fixed_burden_pct": burden,
+                    "target_net_pct": finance_ctx["target_net_pct"] if finance_ctx["complete"] else None,
+                    "otb_value": finance_ctx.get("otb_value"),
                 },
                 status="pending",
             )

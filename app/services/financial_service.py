@@ -153,8 +153,9 @@ class FinancialService:
             projected_revenue += forecast_qty * price
             projected_cogs += forecast_qty * cost
             
-            # Estoque Atual (Valuation)
-            current_inv = (ad.available_quantity or 0) + (ad.stock_full or 0)
+            # Estoque Atual (Valuation) — Ad não tem coluna stock_full; available_quantity
+            # do ML já inclui estoque Full para anúncios fulfillment
+            current_inv = (ad.available_quantity or 0) + (getattr(ad, 'stock_full', 0) or 0)
             current_inventory_value += current_inv * cost
 
         # 2. Estoque Final Desejado (R$)

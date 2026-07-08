@@ -21,7 +21,10 @@ from app.core.database import SessionLocal
 from app.models.ad import Ad
 from app.models.ml_ads_item_daily import MlAdsItemDaily
 # Fonte única da lógica de classificação/sugestão (compartilhada com o job diário)
-from app.services.ads_decision_engine import _classify, _suggest_action, AdsDecisionEngine, ads_write_enabled
+from app.services.ads_decision_engine import (
+    _classify, _suggest_action, AdsDecisionEngine, ads_write_enabled,
+    get_finance_context, max_acos_for,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +66,21 @@ def ads_intelligence_overview():
         item_ids = [r.item_id for r in agg]
         ads_map = {a.id: a for a in db.query(Ad).filter(Ad.id.in_(item_ids)).all()}
 
+        # Contexto financeiro (custos fixos, meta líquida, OTB) + ciclo de vida
+        finance_ctx = get_finance_context(db)
+        engine = AdsDecisionEngine(db)
+        units_alltime = dict(db.query(
+            MlAdsItemDaily.item_id, func.sum(MlAdsItemDaily.units_quantity)
+        ).filter(MlAdsItemDaily.item_id.in_(item_ids)).group_by(MlAdsItemDaily.item_id).all())
+        burden = finance_ctx["fixed_burden_pct"] if finance_ctx["complete"] else None
+        target_net = finance_ctx["target_net_pct"] if finance_ctx["complete"] else None
+
         items = []
         totals = {"spend": 0.0, "ads_revenue": 0.0, "clicks": 0, "prints": 0, "units": 0}
         class_counts = {}
         burn_total = 0.0
+        weighted_contrib = 0.0   # contribuição ponderada pela receita via Ads
+        weighted_base = 0.0
 
         for r in agg:
             spend = float(r.spend or 0)
@@ -88,7 +102,10 @@ def ads_intelligence_overview():
             cpc = round(spend / clicks, 2) if clicks > 0 else None
             cvr = round(units / clicks * 100, 2) if clicks > 0 else None
 
-            classification = _classify(spend, ads_revenue, acos, margin_percent)
+            stage = engine.infer_lifecycle(ad, int(units_alltime.get(r.item_id) or 0))
+            m_acos = max_acos_for(margin_percent, finance_ctx, stage)
+            classification = _classify(spend, ads_revenue, acos, margin_percent,
+                                       max_acos=m_acos, fixed_burden_pct=burden)
             class_counts[classification] = class_counts.get(classification, 0) + 1
             if classification in ("queimando", "prejuizo"):
                 burn_total += spend
@@ -97,6 +114,14 @@ def ads_intelligence_overview():
             ads_profit = None
             if margin_percent is not None:
                 ads_profit = round(ads_revenue * (margin_percent / 100.0) - spend, 2)
+
+            # Margem líquida REAL: contribuição - ACOS - custos fixos
+            net_margin_pct = None
+            if burden is not None and margin_percent is not None and acos is not None:
+                net_margin_pct = round(margin_percent - acos - burden, 2)
+            if margin_percent is not None and ads_revenue > 0:
+                weighted_contrib += margin_percent * ads_revenue
+                weighted_base += ads_revenue
 
             totals["spend"] += spend
             totals["ads_revenue"] += ads_revenue
@@ -125,8 +150,13 @@ def ads_intelligence_overview():
                 "margin_percent": margin_percent,
                 "ads_profit": ads_profit,
                 "classification": classification,
+                "lifecycle_stage": stage,
+                "max_acos": m_acos,
+                "net_margin_pct": net_margin_pct,
                 "action": _suggest_action(classification, spend, ads_revenue, acos,
-                                          margin_percent, int(r.days_active or 0), days),
+                                          margin_percent, int(r.days_active or 0), days,
+                                          max_acos=m_acos, fixed_burden_pct=burden,
+                                          target_net_pct=target_net),
             })
 
         # Worst offenders first: queimando/prejuizo by spend desc
@@ -151,7 +181,21 @@ def ads_intelligence_overview():
 
         global_acos = round(totals["spend"] / totals["ads_revenue"] * 100, 2) if totals["ads_revenue"] > 0 else None
 
+        # Equação da saúde: contribuição média (ponderada por receita via Ads)
+        # - ACOS global - custos fixos % = líquida real do canal Ads
+        avg_contribution = round(weighted_contrib / weighted_base, 2) if weighted_base > 0 else None
+        global_net_pct = None
+        if finance_ctx["complete"] and avg_contribution is not None and global_acos is not None:
+            global_net_pct = round(avg_contribution - global_acos - finance_ctx["fixed_burden_pct"], 2)
+
+        finance_block = {
+            **finance_ctx,
+            "avg_contribution_pct": avg_contribution,
+            "global_net_pct": global_net_pct,
+        }
+
         return jsonify({
+            "finance": finance_block,
             "has_data": True,
             "period_days": days,
             "date_from": start_date.isoformat(),

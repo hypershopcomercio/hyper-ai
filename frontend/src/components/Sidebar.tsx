@@ -74,7 +74,7 @@ export function Sidebar({ isCollapsed, toggleSidebar }: SidebarProps) {
             icon: Wallet,
             items: [
                 { name: "Dashboard", href: "/finance", icon: BarChart2 },
-                { name: "Configurações", href: "/financial/settings", icon: Settings, disabled: true }
+                { name: "Custos Fixos", href: "/financial/settings", icon: Settings }
             ]
         },
         {
