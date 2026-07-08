@@ -43,7 +43,9 @@ DEFAULT_SETTINGS = {
         "taxa_fixa_shopee": 3.0,
         "calcular_difal": True,
         "uf_origem": "SP",
-        "aliquota_interna": 18
+        "aliquota_interna": 18,
+        "icms_interestadual_nacional": 12,
+        "icms_interestadual_importado": 4
     },
     "estoque": {
         "nivel_critico": 3,

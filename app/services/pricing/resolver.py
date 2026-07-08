@@ -106,6 +106,13 @@ class PricingDataResolver:
             missing_fields.append("st_value")
             hard_locks.append("MISSING_ST_DATA")
 
+        # DIFAL (antecipacao de ICMS na entrada — so quando NAO ha ST)
+        difal_val, difal_audit = self._resolve_difal_value(tax_profile_record, purchase_cost_record, latest_nfe_item)
+        inputs['difal_value'] = difal_val
+        audit['difal_value'] = difal_audit
+        if difal_audit['is_missing']:
+            missing_fields.append("difal_value")
+
         # Extra Costs
         extra_costs_val, extra_costs_audit = self._resolve_purchase_extra_costs(purchase_cost_record, latest_nfe_item, latest_reconciliation)
         inputs['purchase_extra_costs'] = extra_costs_val
@@ -117,13 +124,13 @@ class PricingDataResolver:
             final_cost_audit = self._build_audit_entry(0.0, "none", "estimated", "low", formula="Missing Base Cost", is_missing=True, is_usable=False)
             missing_fields.append("final_product_cost")
         else:
-            final_cost = base_cost_val + ipi_val + st_val + extra_costs_val
+            final_cost = base_cost_val + ipi_val + st_val + difal_val + extra_costs_val
             final_cost_audit = self._build_audit_entry(
-                final_cost, 
-                "calculated", 
-                "automatic", 
-                "high" if not (ipi_audit['is_missing'] or st_audit['is_missing']) else "medium",
-                formula="Base Cost + IPI + ST + Extra Costs",
+                final_cost,
+                "calculated",
+                "automatic",
+                "high" if not (ipi_audit['is_missing'] or st_audit['is_missing'] or difal_audit['is_missing']) else "medium",
+                formula="Base Cost + IPI + ST + DIFAL + Extra Costs",
                 is_missing=False,
                 is_usable=True
             )
@@ -378,22 +385,21 @@ class PricingDataResolver:
 
     def _resolve_ipi_value(self, nf_value: float, base_cost: float, t_prof: ProductTaxProfile, latest_nfe_item: Any = None, latest_reconciliation: Any = None) -> Tuple[float, float, Dict]:
         if latest_nfe_item and latest_reconciliation:
-            # IPI is a tax paid only on the fiscal (NF) portion of the transaction.
-            # In a "meia nota" the NF covers half the real units; the hidden units
-            # had no IPI collected. So total IPI paid = ipi_value on the NF (no
-            # multiplier on the total). But the per-unit cost must be spread across
-            # ALL real units (qty * multiplier), not just the NF quantity.
-            qty = float(latest_nfe_item.quantity or 1)
+            # IPI incide sobre o valor FISCAL da NF. Na meia nota o multiplicador
+            # dobra o VALOR unitario (a quantidade real e a MESMA da NF — valor
+            # NF = custo real / multiplicador, ver planilha Precificacao MEV:
+            # F3 = G3/2). Logo IPI por unidade = IPI total da NF / qtd da NF.
+            # Validado contra planilha do usuario (forno: 122.90/24 = 5.1208).
+            qty = float(latest_nfe_item.quantity or 1) or 1.0
             multiplier = float(latest_reconciliation.financial_multiplier or 1)
-            real_qty = qty * multiplier or 1.0
-            ipi_per_unit = float(latest_nfe_item.ipi_value or 0) / real_qty
+            ipi_per_unit = float(latest_nfe_item.ipi_value or 0) / qty
             ipi_rate_from_nf = float(latest_nfe_item.ipi_rate) if latest_nfe_item.ipi_rate else 0.0
             return ipi_rate_from_nf, ipi_per_unit, self._build_audit_entry(
                 ipi_per_unit,
                 "nfe_items + nfe_reconciliations",
                 "automatic",
                 "high",
-                formula=f"IPI NF-e ({latest_nfe_item.ipi_value}) / qty({qty}) — taxa {ipi_rate_from_nf}% (imposto real pago)",
+                formula=f"IPI NF-e ({latest_nfe_item.ipi_value}) / qtd NF ({qty}) — taxa {ipi_rate_from_nf}% (imposto real pago sobre valor fiscal)",
                 is_missing=False,
                 is_usable=True,
                 extra=self._build_nfe_audit_extra(latest_nfe_item, latest_reconciliation, ipi_per_unit, ipi_per_unit, multiplier)
@@ -502,6 +508,125 @@ class PricingDataResolver:
             )
 
         return 0.0, self._build_audit_entry(0.0, "none", "estimated", "low", formula="ST exigida mas parâmetros ausentes (MVA/ICMS)", is_missing=True, is_usable=False)
+
+    def _get_config_float(self, key: str, group: str, default: float) -> float:
+        """Le um numero de system_config (key+group), com default se ausente."""
+        from app.models.system_config import SystemConfig
+        try:
+            sc = self.db.query(SystemConfig).filter(
+                SystemConfig.key == key, SystemConfig.group == group
+            ).first()
+            if sc and sc.value not in (None, ''):
+                return float(sc.value)
+        except (ValueError, TypeError):
+            pass
+        return default
+
+    def _get_config_bool(self, key: str, group: str, default: bool) -> bool:
+        from app.models.system_config import SystemConfig
+        sc = self.db.query(SystemConfig).filter(
+            SystemConfig.key == key, SystemConfig.group == group
+        ).first()
+        if sc and sc.value not in (None, ''):
+            return str(sc.value).strip().lower() in ('true', '1', 'sim', 'yes')
+        return default
+
+    def _resolve_difal_value(self, t_prof: ProductTaxProfile, p_cost: ProductPurchaseCost, latest_nfe_item: Any = None) -> Tuple[float, Dict]:
+        """
+        DIFAL de entrada (antecipacao de ICMS, Simples Nacional): comprador
+        recolhe a diferenca entre a aliquota interna do estado destino e a
+        interestadual da compra. NAO se aplica a produto com ST (ICMS ja
+        retido na cadeia). Base = valor unitario FISCAL da NF.
+
+        Validado contra planilha Precificacao MEV (aba PRODUTOS SEM ST):
+        Valor Difal = Custo NF x (Aliq interna - Aliq ICMS da nota).
+        Aliquotas vem de system_config (grupo financeiro) — nada em codigo:
+          aliquota_interna (18), icms_interestadual_nacional (12),
+          icms_interestadual_importado (4), calcular_difal (true).
+        """
+        # Produto com ST nao paga DIFAL
+        if t_prof and getattr(t_prof, 'has_st', False):
+            return 0.0, self._build_audit_entry(
+                0.0, "product_tax_profiles", "automatic", "high",
+                formula="DIFAL nao se aplica: produto com ST (ICMS retido por substituicao)",
+                is_missing=False, is_usable=True
+            )
+
+        if not self._get_config_bool('calcular_difal', 'financeiro', True):
+            return 0.0, self._build_audit_entry(
+                0.0, "system_config", "automatic", "high",
+                formula="Calculo de DIFAL desativado nas configuracoes (financeiro.calcular_difal)",
+                is_missing=False, is_usable=True
+            )
+
+        # Perfil fiscal explicito dizendo que nao ha DIFAL
+        if t_prof and getattr(t_prof, 'has_difal', None) is False and getattr(t_prof, 'has_st', None) is False \
+                and getattr(t_prof, 'destination_icms_rate', None) is not None:
+            return 0.0, self._build_audit_entry(
+                0.0, "product_tax_profiles", "automatic", "medium",
+                formula="Perfil fiscal marca has_difal=false para este produto",
+                is_missing=False, is_usable=True
+            )
+
+        # Base FISCAL por unidade (o imposto incide sobre a nota, nao sobre o custo real)
+        fiscal_base = 0.0
+        base_source = "none"
+        if latest_nfe_item and float(latest_nfe_item.unit_value or 0) > 0:
+            fiscal_base = float(latest_nfe_item.unit_value)
+            base_source = "nfe_items"
+        elif p_cost and float(getattr(p_cost, 'nf_value', 0) or 0) > 0:
+            fiscal_base = float(p_cost.nf_value)
+            base_source = "product_purchase_costs"
+
+        if fiscal_base <= 0:
+            return 0.0, self._build_audit_entry(
+                0.0, "none", "estimated", "medium",
+                formula="DIFAL nao calculado: valor fiscal da NF ausente. Vincule a NF-e.",
+                is_missing=False, is_usable=True
+            )
+
+        # Aliquota interna do destino (perfil do produto > config global)
+        interna = None
+        if t_prof and getattr(t_prof, 'destination_icms_rate', None) is not None:
+            interna = float(t_prof.destination_icms_rate)
+        if not interna or interna <= 0:
+            interna = self._get_config_float('aliquota_interna', 'financeiro', 18.0)
+
+        # Aliquota interestadual: 1) real da NF (icms_rate do XML); 2) por origem no perfil
+        inter = None
+        inter_source = None
+        if latest_nfe_item and float(latest_nfe_item.icms_rate or 0) > 0:
+            inter = float(latest_nfe_item.icms_rate)
+            inter_source = f"ICMS da NF ({inter}%)"
+        elif t_prof and getattr(t_prof, 'origin_icms_rate', None) is not None and float(t_prof.origin_icms_rate) > 0:
+            inter = float(t_prof.origin_icms_rate)
+            inter_source = f"perfil fiscal ({inter}%)"
+        elif t_prof and getattr(t_prof, 'product_origin', None):
+            origin = t_prof.product_origin.value if hasattr(t_prof.product_origin, 'value') else str(t_prof.product_origin)
+            if origin == 'importado':
+                inter = self._get_config_float('icms_interestadual_importado', 'financeiro', 4.0)
+            else:
+                inter = self._get_config_float('icms_interestadual_nacional', 'financeiro', 12.0)
+            inter_source = f"config por origem '{origin}' ({inter}%)"
+
+        if inter is None:
+            return 0.0, self._build_audit_entry(
+                0.0, "none", "estimated", "low",
+                formula="DIFAL exigido mas aliquota interestadual desconhecida (sem ICMS na NF e sem perfil fiscal)",
+                is_missing=True, is_usable=False
+            )
+
+        difal_rate = max(0.0, interna - inter)
+        difal_val = fiscal_base * (difal_rate / 100.0)
+        return difal_val, self._build_audit_entry(
+            difal_val,
+            base_source if base_source != "none" else "calculated",
+            "automatic",
+            "high" if base_source == "nfe_items" else "medium",
+            formula=f"Base fiscal ({fiscal_base}) x [Interna {interna}% - Interestadual {inter_source}] = {difal_rate}%",
+            is_missing=False,
+            is_usable=True
+        )
 
     def _resolve_purchase_extra_costs(self, p_cost: ProductPurchaseCost, latest_nfe_item: Any = None, latest_reconciliation: Any = None) -> Tuple[float, Dict]:
         if p_cost and getattr(p_cost, 'data_source', '') == 'manual':

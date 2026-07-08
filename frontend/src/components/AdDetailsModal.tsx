@@ -387,7 +387,7 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                 : 'text-emerald-400';
     const roasClass = ads?.roas == null ? 'text-slate-400' : ads.roas >= 1 ? 'text-emerald-400' : 'text-rose-400';
     // DIFAL: fonte única = resolver de precificação (mesma da aba Ficha Fiscal)
-    const difalCost = Number(pricingResolution?.costs?.difal_value ?? 0);
+    const difalCost = Number(pricingResolution?.audit?.difal_value?.value ?? 0);
     // Custo variável (embalagem/un.) vindo do backend
     const variableCost = Number((ad?.financials as any)?.variable_cost ?? 0);
     // P&L do período (30 dias) — dados já no payload

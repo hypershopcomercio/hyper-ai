@@ -401,6 +401,7 @@ def simulate_pricing_from_resolver(ad_id):
         base_cost = float(calc_inputs.get('product_base_cost') or 0)
         ipi_value_resolved = float(calc_inputs.get('ipi_value') or 0)
         st_value_resolved = float(calc_inputs.get('st_value') or 0)
+        difal_value_resolved = float(calc_inputs.get('difal_value') or 0)
         extra_costs = float(calc_inputs.get('purchase_extra_costs') or 0)
         # Usar final_product_cost do resolver (já inclui IPI, ST, extras da NF-e)
         # Isso evita re-calcular com alíquotas quando a fonte é NF-e (que retorna valores, não taxas)
@@ -481,6 +482,7 @@ def simulate_pricing_from_resolver(ad_id):
                 "product_base_cost": base_cost,
                 "ipi_value": ipi_value_resolved,
                 "st_value": st_value_resolved,
+                "difal_value": difal_value_resolved,
                 "purchase_extra_costs": extra_costs,
                 "final_product_cost": full_product_cost,
                 "marketplace_commission": result.marketplace_fee_value,

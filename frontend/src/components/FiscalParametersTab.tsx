@@ -239,6 +239,10 @@ export function FiscalParametersTab({ adId, pricingResolution, isResolvingPricin
                             <span>{formatCurrency(audit?.st_value?.value || 0)}</span>
                         </div>
                         <div className="flex justify-between text-slate-400">
+                            <span>(+) DIFAL (ICMS Interestadual)</span>
+                            <span>{formatCurrency(audit?.difal_value?.value || 0)}</span>
+                        </div>
+                        <div className="flex justify-between text-slate-400">
                             <span>(+) Custos Extras Compra</span>
                             <span>{formatCurrency(audit?.purchase_extra_costs?.value || 0)}</span>
                         </div>
@@ -274,6 +278,7 @@ export function FiscalParametersTab({ adId, pricingResolution, isResolvingPricin
                             {renderAuditRow("IPI (Rate)", "ipi_rate")}
                             {renderAuditRow("IPI (Valor)", "ipi_value")}
                             {renderAuditRow("ST (Valor)", "st_value")}
+                            {renderAuditRow("DIFAL (Valor)", "difal_value")}
                             {renderAuditRow("Extras de Compra", "purchase_extra_costs")}
                             {renderAuditRow("DAS/Simples", "sales_tax_rate")}
                             {renderAuditRow("Custo Final", "final_product_cost")}

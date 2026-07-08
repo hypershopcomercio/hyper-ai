@@ -11,6 +11,135 @@ interface SettingsData {
     [key: string]: any;
 }
 
+interface MonthlyTaxConfig {
+    id: number;
+    reference_month: string;
+    full_das_rate: number;
+    das_without_icms_rate: number;
+    is_active: boolean;
+    notes?: string;
+}
+
+// Editor das alíquotas mensais do Simples Nacional (monthly_tax_configs).
+// full_das_rate = alíquota cheia do DAS no mês; das_without_icms_rate = DAS
+// sem a parcela de ICMS (PIS/COFINS + IRPJ/CPP/CSLL) — usada quando o produto
+// tem ST (ICMS já retido). Valores vêm do extrato mensal do Simples.
+function MonthlyTaxConfigCard() {
+    const [configs, setConfigs] = useState<MonthlyTaxConfig[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+    const [form, setForm] = useState({ reference_month: '', full_das_rate: '', das_without_icms_rate: '', notes: '' });
+
+    const fetchConfigs = async () => {
+        try {
+            const res = await api.get('/finance/tax-configs');
+            setConfigs(res.data?.data || []);
+        } catch (e) {
+            console.error('Erro ao carregar alíquotas mensais:', e);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => { fetchConfigs(); }, []);
+
+    const handleSave = async () => {
+        if (!form.reference_month || !form.full_das_rate || !form.das_without_icms_rate) {
+            alert('Preencha mês de referência e as duas alíquotas.');
+            return;
+        }
+        setSaving(true);
+        try {
+            await api.post('/finance/tax-configs', {
+                reference_month: form.reference_month,
+                full_das_rate: Number(form.full_das_rate),
+                das_without_icms_rate: Number(form.das_without_icms_rate),
+                notes: form.notes || undefined,
+            });
+            setForm({ reference_month: '', full_das_rate: '', das_without_icms_rate: '', notes: '' });
+            await fetchConfigs();
+        } catch (e: any) {
+            alert('Erro ao salvar alíquota: ' + (e?.response?.data?.error || e?.message));
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <div className="bg-[#12121a] rounded-xl border border-slate-800/50 p-6">
+            <h3 className="text-lg font-semibold text-white mb-1">Alíquotas Mensais do Simples (DAS)</h3>
+            <p className="text-xs text-slate-500 mb-4">
+                Atualize todo mês com o extrato do Simples. <span className="text-slate-400">DAS cheio</span> = alíquota efetiva total.{' '}
+                <span className="text-slate-400">DAS sem ICMS</span> = PIS/COFINS + IRPJ/CPP/CSLL (usada em produtos com ST, onde o ICMS já foi retido).
+            </p>
+
+            {/* Form nova alíquota */}
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5 items-end">
+                <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">Mês (AAAA-MM)</label>
+                    <input type="month" value={form.reference_month}
+                        onChange={e => setForm(f => ({ ...f, reference_month: e.target.value }))}
+                        className="bg-slate-800 border border-slate-600 text-white rounded px-3 py-2 w-full focus:ring-1 focus:ring-cyan-500" />
+                </div>
+                <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">DAS cheio (%)</label>
+                    <input type="number" step="0.01" placeholder="6.68" value={form.full_das_rate}
+                        onChange={e => setForm(f => ({ ...f, full_das_rate: e.target.value }))}
+                        className="bg-slate-800 border border-slate-600 text-white rounded px-3 py-2 w-full focus:ring-1 focus:ring-cyan-500" />
+                </div>
+                <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">DAS sem ICMS (%)</label>
+                    <input type="number" step="0.01" placeholder="4.83" value={form.das_without_icms_rate}
+                        onChange={e => setForm(f => ({ ...f, das_without_icms_rate: e.target.value }))}
+                        className="bg-slate-800 border border-slate-600 text-white rounded px-3 py-2 w-full focus:ring-1 focus:ring-cyan-500" />
+                </div>
+                <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">Notas (opcional)</label>
+                    <input type="text" placeholder="RBT12, obs..." value={form.notes}
+                        onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                        className="bg-slate-800 border border-slate-600 text-white rounded px-3 py-2 w-full focus:ring-1 focus:ring-cyan-500" />
+                </div>
+                <button onClick={handleSave} disabled={saving}
+                    className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-medium transition-colors cursor-pointer">
+                    {saving ? 'Salvando...' : 'Salvar mês'}
+                </button>
+            </div>
+
+            {/* Histórico */}
+            {loading ? (
+                <p className="text-xs text-slate-500">Carregando...</p>
+            ) : configs.length === 0 ? (
+                <p className="text-xs text-amber-400">Nenhuma alíquota cadastrada — a Ficha Fiscal fica bloqueada sem isso (MISSING_MONTHLY_TAX_CONFIG).</p>
+            ) : (
+                <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                        <thead>
+                            <tr className="text-slate-500 border-b border-slate-800">
+                                <th className="text-left py-2 font-medium">Mês</th>
+                                <th className="text-right py-2 font-medium">DAS cheio</th>
+                                <th className="text-right py-2 font-medium">DAS sem ICMS</th>
+                                <th className="text-right py-2 font-medium">ICMS embutido</th>
+                                <th className="text-left py-2 pl-4 font-medium">Notas</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {configs.map(c => (
+                                <tr key={c.id} className="border-b border-slate-800/50 text-slate-300">
+                                    <td className="py-2 font-mono">{c.reference_month}</td>
+                                    <td className="py-2 text-right font-mono">{Number(c.full_das_rate).toFixed(2)}%</td>
+                                    <td className="py-2 text-right font-mono">{Number(c.das_without_icms_rate).toFixed(2)}%</td>
+                                    <td className="py-2 text-right font-mono text-slate-500">{(Number(c.full_das_rate) - Number(c.das_without_icms_rate)).toFixed(2)}%</td>
+                                    <td className="py-2 pl-4 text-slate-500">{c.notes || '—'}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function ConfiguracoesPage() {
     const [activeTab, setActiveTab] = useState<SettingsTab>('financeiro');
     const [settings, setSettings] = useState<Record<string, SettingsData>>({});
@@ -172,22 +301,34 @@ export default function ConfiguracoesPage() {
                 </div>
 
                 <div className="bg-[#12121a] rounded-xl border border-slate-800/50 p-6">
-                    <h3 className="text-lg font-semibold text-white mb-4">Configurações de DIFAL</h3>
+                    <h3 className="text-lg font-semibold text-white mb-1">ICMS — DIFAL de Entrada (Antecipação)</h3>
+                    <p className="text-xs text-slate-500 mb-4">Usado na Ficha Fiscal: DIFAL = valor fiscal da NF × (alíquota interna − interestadual). Produtos com ST não pagam DIFAL.</p>
                     <div className="grid gap-4">
                         <div className="flex items-center gap-3">
                             {renderInput('calcular_difal', data.calcular_difal, 'checkbox')}
-                            <label className="text-slate-300">Calcular DIFAL automaticamente nas vendas interestaduais</label>
+                            <label className="text-slate-300">Calcular DIFAL automaticamente nas compras interestaduais (produtos sem ST)</label>
                         </div>
                         <div className="flex items-center justify-between">
-                            <label className="text-slate-300">UF Origem</label>
+                            <label className="text-slate-300">UF da Empresa (destino)</label>
                             {renderInput('uf_origem', data.uf_origem, 'text')}
                         </div>
                         <div className="flex items-center justify-between">
-                            <label className="text-slate-300">Alíquota Interna (%)</label>
+                            <label className="text-slate-300">Alíquota Interna do Estado (%)</label>
                             {renderInput('aliquota_interna', data.aliquota_interna, 'number')}
                         </div>
+                        <div className="flex items-center justify-between">
+                            <label className="text-slate-300">Alíquota Interestadual — Produto Nacional (%)</label>
+                            {renderInput('icms_interestadual_nacional', data.icms_interestadual_nacional, 'number')}
+                        </div>
+                        <div className="flex items-center justify-between">
+                            <label className="text-slate-300">Alíquota Interestadual — Produto Importado (%)</label>
+                            {renderInput('icms_interestadual_importado', data.icms_interestadual_importado, 'number')}
+                        </div>
+                        <p className="text-[11px] text-slate-600">A alíquota interestadual real da NF (quando o XML informa o ICMS) tem prioridade sobre estes valores — eles são o fallback por origem do produto.</p>
                     </div>
                 </div>
+
+                <MonthlyTaxConfigCard />
             </div>
         );
     };
