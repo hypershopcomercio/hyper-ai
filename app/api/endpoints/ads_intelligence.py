@@ -316,6 +316,24 @@ def ads_recommendations_decide(rec_id):
 
         engine = AdsDecisionEngine(db)
         executed, message = engine.execute_recommendation(rec)
+
+        # Plano B: sem execução automática (escrita desligada, ação manual ou
+        # API negou), guia a execução manual via WhatsApp na hora do aceite.
+        if not executed:
+            try:
+                from app.services.notifier import send_whatsapp
+                snap = rec.metrics_snapshot or {}
+                action_labels = {"pausar": "PAUSAR", "reduzir_ou_pausar": "REDUZIR/PAUSAR", "aumentar": "AUMENTAR verba de"}
+                send_whatsapp(
+                    f"✅ Você aceitou: {action_labels.get(rec.action_code, rec.action_code)} "
+                    f"{(snap.get('title') or rec.item_id)[:60]} ({rec.item_id})\n"
+                    f"Execução automática indisponível — faça no Mercado Ads:\n"
+                    f"https://ads.mercadolivre.com.br\n"
+                    f"Busque pelo código {rec.item_id} na campanha."
+                )
+            except Exception as e:
+                logger.warning(f"WhatsApp do plano B falhou (não-fatal): {e}")
+
         return jsonify({
             "status": rec.status,   # executed | failed | accepted (escrita off / ação manual)
             "executed": executed,
