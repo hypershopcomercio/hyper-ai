@@ -479,11 +479,11 @@ class MeliApiService:
         ESCRITA no Product Ads: muda o status de um anúncio (paused/active).
         Chamada SOMENTE pelo AdsDecisionEngine com ADS_WRITE_ENABLED=true.
 
-        Descoberto em produção (2026-07-08): o recurso do item vive em
-        /advertising/product_ads/items/{MLB} (GET 200). O PUT nesse path retorna
-        403 PolicyAgent enquanto o app não tiver permissão de escrita em Ads —
-        o erro é devolvido íntegro para diagnóstico. Variante por campanha
-        tentada como fallback (autodescoberta cacheada em system_config).
+        Formato OFICIAL (doc de gestão de Product Ads): PUT batch na coleção
+          PUT /marketplace/advertising/{SITE}/advertisers/{ID}/product_ads/ads?channel=marketplace
+          body {"target": ["MLB..."], "payload": {"status": "paused"}}
+        Fallback: PUT direto no recurso do item (variante observada em prod).
+        Autodescoberta cacheada em system_config.ads_write_path_variant.
         """
         from app.models.system_config import SystemConfig
         db = self.db_session
@@ -494,22 +494,29 @@ class MeliApiService:
             local_session = True
 
         try:
-            # Campaign_id para a variante por campanha
-            info = self.get_product_ad_item(item_id)
-            campaign_id = info.get("campaign_id") if info else None
-
-            candidates = [("items", f"/advertising/product_ads/items/{item_id}")]
-            if campaign_id:
-                candidates.append(("campaign_items",
-                                   f"/advertising/product_ads/campaigns/{campaign_id}/items/{item_id}"))
+            advertiser_id = self.get_advertiser_id()
+            candidates = []
+            if advertiser_id:
+                candidates.append((
+                    "batch_marketplace",
+                    f"/marketplace/advertising/MLB/advertisers/{advertiser_id}/product_ads/ads",
+                    {"channel": "marketplace"},
+                    {"target": [item_id], "payload": {"status": status}},
+                ))
+            candidates.append((
+                "items",
+                f"/advertising/product_ads/items/{item_id}",
+                None,
+                {"status": status},
+            ))
 
             cached = db.query(SystemConfig).filter_by(key="ads_write_path_variant").first()
             if cached and cached.value:
                 candidates.sort(key=lambda c: 0 if c[0] == cached.value else 1)
 
             last = {"ok": False, "status_code": None, "body": None}
-            for variant, endpoint in candidates:
-                response = self.request('PUT', endpoint, json_data={"status": status},
+            for variant, endpoint, params, body_payload in candidates:
+                response = self.request('PUT', endpoint, params=params, json_data=body_payload,
                                         extra_headers={"Api-Version": "2"}, max_retries=1)
                 if response is None:
                     last = {"ok": False, "status_code": None, "body": "sem resposta"}
@@ -528,9 +535,9 @@ class MeliApiService:
                     logger.info(f"Product Ad {item_id} -> status '{status}' OK via variante '{variant}'.")
                     return {"ok": True, "status_code": response.status_code, "endpoint": endpoint, "body": body}
                 last = {"ok": False, "status_code": response.status_code, "body": response.text[:300], "endpoint": endpoint}
-                # 404/405 = path errado, tenta próxima variante; 403 PolicyAgent
-                # (falta permissão de escrita no app) e demais erros abortam
-                if response.status_code not in (404, 405):
+                # 404/405/503 = rota/serviço errado, tenta próxima variante;
+                # 401/403 (permissão) e demais erros abortam
+                if response.status_code not in (404, 405, 503):
                     break
 
             logger.error(f"update_product_ad_status({item_id}, {status}) falhou: {last}")
