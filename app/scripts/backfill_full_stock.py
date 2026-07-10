@@ -25,7 +25,8 @@ def main():
         result = svc.sync_and_cost()
         stock = result["stock"]
         cost = result["cost"]
-        print(f"Sync: {stock['ads_full']} Full ads, {stock['inventories']} inventory records.")
+        print(f"Sync: {stock['ads_full']} Full ads, {stock['inventories']} inventory records, "
+              f"{stock.get('dimensions_updated', 0)} real dimension records updated.")
         print(f"Full cost written for {cost.get('updated', 0)} SKUs. {cost.get('reason', '')}")
 
         from sqlalchemy import func

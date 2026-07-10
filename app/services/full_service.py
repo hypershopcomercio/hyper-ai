@@ -108,12 +108,20 @@ class FullService:
         logger.info(f"[Full] {len(ads)} anúncios marcados como Full.")
 
         processed = 0
+        dimensions_updated = 0
         for ad in ads:
             try:
                 item = self.meli.get_item(ad.id)
+                dimensions = MeliApiService.extract_shipping_dimensions(item)
+                if dimensions:
+                    current = (ad.length_mm, ad.width_mm, ad.height_mm)
+                    if current != dimensions:
+                        ad.length_mm, ad.width_mm, ad.height_mm = dimensions
+                        dimensions_updated += 1
                 inv_pairs = MeliApiService.extract_inventory_ids(item)
                 if not inv_pairs:
                     logger.debug(f"[Full] {ad.id} sem inventory_id no payload.")
+                    self.db.commit()  # persist real dimensions without an inventory_id
                     continue
 
                 for inventory_id, variation_id in inv_pairs:
@@ -159,7 +167,8 @@ class FullService:
                 logger.error(f"[Full] falha ao sincronizar {ad.id}: {e}")
 
         logger.info(f"[Full] sync concluído: {processed} unidades de inventário.")
-        return {"ads_full": len(ads), "inventories": processed}
+        return {"ads_full": len(ads), "inventories": processed,
+                "dimensions_updated": dimensions_updated}
 
     # ------------------------------------------------------------------
     # MOTOR DE CUSTO REAL

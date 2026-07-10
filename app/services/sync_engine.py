@@ -321,6 +321,9 @@ class SyncEngine:
         ad.free_shipping = shipping.get("free_shipping", False)
         ad.shipping_mode = shipping.get("mode") 
         ad.is_full = (shipping.get("logistic_type") == "fulfillment")
+        dimensions = MeliApiService.extract_shipping_dimensions(item_data)
+        if dimensions:
+            ad.length_mm, ad.width_mm, ad.height_mm = dimensions
         ad.health = float(item_data.get("health", 0)) if item_data.get("health") else 0.0
 
         sku = None

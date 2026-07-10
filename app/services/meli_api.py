@@ -596,6 +596,38 @@ class MeliApiService:
                 out.append((inv, vid))
         return out
 
+    @staticmethod
+    def extract_shipping_dimensions(item_json: dict):
+        """Return shipped dimensions as ``(length, width, height)`` in mm.
+
+        Mercado Livre item payloads normally expose ``shipping.dimensions`` as
+        ``"16x23x34,500"``: axes are centimetres and the value after the comma
+        is package weight. ``None`` means no real dimensions were supplied.
+        """
+        if not item_json:
+            return None
+        shipping = item_json.get("shipping") or {}
+        raw = shipping.get("dimensions") or item_json.get("dimensions")
+        values = None
+
+        if isinstance(raw, str):
+            axes = raw.split(",", 1)[0].lower().replace(" ", "").split("x")
+            if len(axes) == 3:
+                try:
+                    values = [float(axis.replace(",", ".")) for axis in axes]
+                except ValueError:
+                    values = None
+        elif isinstance(raw, dict):
+            try:
+                values = [float(raw[key]) for key in ("length", "width", "height")]
+                unit = str(raw.get("unit") or raw.get("unit_of_measure") or "cm").lower()
+                if unit in {"mm", "millimeter", "millimeters"}:
+                    return tuple(values) if all(value > 0 for value in values) else None
+            except (KeyError, TypeError, ValueError):
+                values = None
+
+        return tuple(value * 10.0 for value in values) if values and all(value > 0 for value in values) else None
+
     def get_fulfillment_operations(self, seller_id: str = None, inventory_id: str = None,
                                    date_from: str = None, date_to: str = None, op_type: str = None):
         """
