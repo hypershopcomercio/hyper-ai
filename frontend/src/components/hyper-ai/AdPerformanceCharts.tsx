@@ -24,6 +24,7 @@ export function AdPerformanceCharts({ ad }: Props) {
             fullDate: new Date(day.date).toLocaleDateString('pt-BR'),
             visits: day.visits,
             sales: day.sales,
+            revenue: day.revenue || 0,
             conversion: day.visits > 0 ? (day.sales / day.visits * 100) : 0
         }));
     }, [ad, dateRange]);
@@ -34,10 +35,41 @@ export function AdPerformanceCharts({ ad }: Props) {
 
         const totalVisits = filteredData.reduce((acc, curr) => acc + curr.visits, 0);
         const totalSales = filteredData.reduce((acc, curr) => acc + curr.sales, 0);
+        const totalRevenue = filteredData.reduce((acc, curr) => acc + curr.revenue, 0);
         const avgConversion = totalVisits > 0 ? (totalSales / totalVisits * 100) : 0;
 
-        return { totalVisits, totalSales, avgConversion };
+        return { totalVisits, totalSales, totalRevenue, avgConversion };
     }, [filteredData]);
+
+    // Tendência REAL: compara a metade final do período com a inicial (sem dados falsos)
+    const trends = useMemo(() => {
+        if (filteredData.length < 4) return null;
+        const mid = Math.floor(filteredData.length / 2);
+        const first = filteredData.slice(0, mid);
+        const second = filteredData.slice(mid);
+        const sum = (arr: typeof filteredData, k: 'visits' | 'sales' | 'revenue') => arr.reduce((a, c) => a + (c[k] || 0), 0);
+        const pct = (now: number, before: number) => before > 0 ? ((now - before) / before * 100) : (now > 0 ? 100 : 0);
+        const vNow = sum(second, 'visits'), vBefore = sum(first, 'visits');
+        const sNow = sum(second, 'sales'), sBefore = sum(first, 'sales');
+        const rNow = sum(second, 'revenue'), rBefore = sum(first, 'revenue');
+        const cNow = vNow > 0 ? sNow / vNow * 100 : 0;
+        const cBefore = vBefore > 0 ? sBefore / vBefore * 100 : 0;
+        return {
+            visits: pct(vNow, vBefore),
+            sales: pct(sNow, sBefore),
+            revenue: pct(rNow, rBefore),
+            conversionPp: cNow - cBefore, // diferença em pontos percentuais
+        };
+    }, [filteredData]);
+
+    // Badge de tendência reutilizável (verde sobe / vermelho cai / neutro estável)
+    const TrendBadge = ({ value, suffix = '%', neutralBelow = 1 }: { value: number | undefined; suffix?: string; neutralBelow?: number }) => {
+        if (value == null || !isFinite(value)) return <span className="text-[10px] text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded font-bold">~</span>;
+        const isNeutral = Math.abs(value) < neutralBelow;
+        const cls = isNeutral ? 'text-slate-500 bg-slate-800' : value > 0 ? 'text-emerald-400 bg-emerald-500/10' : 'text-rose-400 bg-rose-500/10';
+        const sign = value > 0 ? '+' : '';
+        return <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${cls}`}>{isNeutral ? '~' : `${sign}${value.toFixed(value >= 100 ? 0 : 1)}${suffix}`}</span>;
+    };
 
     if (!filteredData.length) return <div className="p-8 text-center text-slate-500">Sem dados para o período.</div>;
 
@@ -70,13 +102,13 @@ export function AdPerformanceCharts({ ad }: Props) {
 
             {/* KPI Cards Row */}
             {stats && (
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                     <div className="bg-[#13141b] border border-white/5 p-4 rounded-xl flex flex-col justify-between">
                         <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-2 text-slate-400 text-xs font-bold uppercase tracking-wider">
                                 <MousePointer2 size={14} /> Visitas
                             </div>
-                            <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded font-bold">+12%</span>
+                            <TrendBadge value={trends?.visits} />
                         </div>
                         <div className="text-2xl font-bold text-white">{stats.totalVisits.toLocaleString('pt-BR')}</div>
                     </div>
@@ -84,9 +116,19 @@ export function AdPerformanceCharts({ ad }: Props) {
                     <div className="bg-[#13141b] border border-white/5 p-4 rounded-xl flex flex-col justify-between">
                         <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-2 text-slate-400 text-xs font-bold uppercase tracking-wider">
+                                <DollarSign size={14} /> Vendas (Un)
+                            </div>
+                            <TrendBadge value={trends?.sales} />
+                        </div>
+                        <div className="text-2xl font-bold text-white">{stats.totalSales}</div>
+                    </div>
+
+                    <div className="bg-[#13141b] border border-white/5 p-4 rounded-xl flex flex-col justify-between">
+                        <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2 text-slate-400 text-xs font-bold uppercase tracking-wider">
                                 <Percent size={14} /> Conversão
                             </div>
-                            <span className="text-[10px] text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded font-bold">~</span>
+                            <TrendBadge value={trends?.conversionPp} suffix="pp" neutralBelow={0.1} />
                         </div>
                         <div className="text-2xl font-bold text-white">{stats.avgConversion.toFixed(2)}%</div>
                     </div>
@@ -94,11 +136,11 @@ export function AdPerformanceCharts({ ad }: Props) {
                     <div className="bg-[#13141b] border border-white/5 p-4 rounded-xl flex flex-col justify-between">
                         <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-2 text-slate-400 text-xs font-bold uppercase tracking-wider">
-                                <DollarSign size={14} /> Vendas (Un)
+                                <TrendingUp size={14} /> Receita
                             </div>
-                            <span className="text-[10px] text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded font-bold">-5%</span>
+                            <TrendBadge value={trends?.revenue} />
                         </div>
-                        <div className="text-2xl font-bold text-white">{stats.totalSales}</div>
+                        <div className="text-2xl font-bold text-white">{stats.totalRevenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</div>
                     </div>
                 </div>
             )}
@@ -194,21 +236,50 @@ export function AdPerformanceCharts({ ad }: Props) {
                 </ResponsiveContainer>
             </div>
 
-            {/* Insights Panel (Kept, but Table REMOVED) */}
-            <div className="space-y-3">
-                <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Análise Automática</h4>
-                <div className="bg-blue-500/5 border border-blue-500/10 rounded-xl p-4 flex items-start gap-4">
-                    <div className="p-2 rounded bg-blue-500/10 text-blue-400 shrink-0">
-                        <TrendingUp size={18} />
+            {/* Insights Panel — narrativa calculada da tendência real */}
+            {(() => {
+                const salesTrend = trends?.sales ?? 0;
+                const visitsTrend = trends?.visits ?? 0;
+                const convPp = trends?.conversionPp ?? 0;
+                // Direção pela venda (sinal de negócio); tom e cor seguem ela
+                const rising = salesTrend > 5;
+                const falling = salesTrend < -5;
+                const tone = rising ? 'emerald' : falling ? 'rose' : 'blue';
+                const toneCls = {
+                    emerald: { wrap: 'bg-emerald-500/5 border-emerald-500/10', icon: 'bg-emerald-500/10 text-emerald-400' },
+                    rose: { wrap: 'bg-rose-500/5 border-rose-500/10', icon: 'bg-rose-500/10 text-rose-400' },
+                    blue: { wrap: 'bg-blue-500/5 border-blue-500/10', icon: 'bg-blue-500/10 text-blue-400' },
+                }[tone];
+                const title = rising ? 'Em crescimento' : falling ? 'Em queda' : 'Estável';
+
+                let narrative: React.ReactNode;
+                if (!trends) {
+                    narrative = <>Dados insuficientes no período de <span className="font-bold text-white">{dateRange} dias</span> para calcular tendência. Amplie a janela ou aguarde mais histórico.</>;
+                } else if (rising || falling) {
+                    // Diagnóstico demanda (visitas) vs eficiência (conversão)
+                    const driver = Math.abs(visitsTrend) >= Math.abs(convPp) * 10
+                        ? <>puxada principalmente por <span className="font-bold text-white">{visitsTrend >= 0 ? '+' : ''}{visitsTrend.toFixed(0)}% de visitas</span> (demanda/tráfego)</>
+                        : <>puxada principalmente pela <span className="font-bold text-white">conversão ({convPp >= 0 ? '+' : ''}{convPp.toFixed(2)} pp)</span> (eficiência do anúncio)</>;
+                    narrative = <>Nos últimos <span className="font-bold text-white">{dateRange} dias</span> as vendas estão <span className={`font-bold ${rising ? 'text-emerald-400' : 'text-rose-400'}`}>{salesTrend >= 0 ? '+' : ''}{salesTrend.toFixed(0)}%</span> (2ª metade vs 1ª), {driver}.</>;
+                } else {
+                    narrative = <>Nos últimos <span className="font-bold text-white">{dateRange} dias</span> as vendas estão estáveis (variação &lt;5%), com conversão média de <span className="font-bold text-white">{stats?.avgConversion.toFixed(2)}%</span>.</>;
+                }
+
+                return (
+                    <div className="space-y-3">
+                        <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Análise Automática</h4>
+                        <div className={`border rounded-xl p-4 flex items-start gap-4 ${toneCls.wrap}`}>
+                            <div className={`p-2 rounded shrink-0 ${toneCls.icon}`}>
+                                <TrendingUp size={18} className={falling ? 'rotate-180' : ''} />
+                            </div>
+                            <div>
+                                <h5 className="text-sm font-bold text-slate-200">{title}</h5>
+                                <p className="text-xs text-slate-400 mt-1 leading-relaxed">{narrative}</p>
+                            </div>
+                        </div>
                     </div>
-                    <div>
-                        <h5 className="text-sm font-bold text-slate-200">Tendência</h5>
-                        <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                            Com base nos últimos {dateRange} dias, sua conversão de <span className="font-bold text-white">{stats?.avgConversion.toFixed(2)}%</span> indica estabilidade.
-                        </p>
-                    </div>
-                </div>
-            </div>
+                );
+            })()}
 
         </div>
     );
