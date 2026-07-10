@@ -522,24 +522,111 @@ class MeliApiService:
         if resp.status_code == 200: return resp.json()
         return None
 
+    # Variantes conhecidas do endpoint de estoque Full (Brasil vs global-selling).
+    # 403 PolicyAgent (PA_UNAUTHORIZED_RESULT_FROM_POLICIES) = app sem permissão de
+    # leitura de Fulfillment — mesmo gate da escrita de Ads. Nesse caso nenhuma
+    # variante resolve (precisa liberar escopo/allowlist no DevCenter do ML).
+    FULFILLMENT_STOCK_TEMPLATES = [
+        "/inventories/{}/stock/fulfillment",
+        "/marketplace/inventories/{}/stock/fulfillment",
+    ]
+
     def get_fulfillment_stock(self, inventory_id: str):
         """
-        Fetch detailed fulfillment stock, including 'transfer' (incoming) status.
-        Endpoint: /inventories/{inventory_id}/stock/fulfillment
+        Estoque detalhado no Full (inclui status 'transfer' = em trânsito).
+        Tenta as variantes de path e memoriza a que funcionar nesta instância.
+        Retorna None em 403/404/400 (gated / inventário inválido / não-Full).
         """
+        templates = self.FULFILLMENT_STOCK_TEMPLATES
+        if getattr(self, "_ff_stock_tpl", None):
+            templates = [self._ff_stock_tpl] + [t for t in templates if t != self._ff_stock_tpl]
+
+        last_status = None
+        for tpl in templates:
+            try:
+                resp = self.request('GET', tpl.format(inventory_id))
+                if resp is None:
+                    continue
+                last_status = resp.status_code
+                if resp.status_code == 200:
+                    self._ff_stock_tpl = tpl  # cacheia o path bom
+                    return resp.json()
+                # 403 (gated), 404/400 (inválido) — tenta a próxima variante
+            except Exception as e:
+                logger.error(f"Error fetching fulfillment stock ({tpl}) for {inventory_id}: {e}")
+        if last_status == 403:
+            logger.warning(f"Fulfillment stock 403 (PolicyAgent) para {inventory_id}: app sem permissão de leitura de Full.")
+        else:
+            logger.warning(f"Fulfillment stock indisponível para {inventory_id} (último status={last_status}).")
+        return None
+
+    def get_item(self, item_id: str):
+        """Fetch a single item's full payload (/items/{id}). None on failure."""
         try:
-             resp = self.request('GET', f"/inventories/{inventory_id}/stock/fulfillment")
-             if resp.status_code == 200:
-                 return resp.json()
-             elif resp.status_code in [404, 400]:
-                 # Inventory ID might be invalid or not Full
-                 return None
-             else:
-                 logger.warning(f"Fulfillment stock fetch failed for {inventory_id}: {resp.status_code}")
-                 return None
+            resp = self.request('GET', f"/items/{item_id}")
+            if resp.status_code == 200:
+                return resp.json()
+            logger.warning(f"get_item({item_id}) -> {resp.status_code}")
+            return None
         except Exception as e:
-             logger.error(f"Error fetching fulfillment stock for {inventory_id}: {e}")
-             return None
+            logger.error(f"Error fetching item {item_id}: {e}")
+            return None
+
+    @staticmethod
+    def extract_inventory_ids(item_json: dict):
+        """
+        Extrai os inventory_id de um payload de item (Full é por variação).
+        Retorna lista de (inventory_id, variation_id|None). Vazia se não houver.
+        """
+        if not item_json:
+            return []
+        pairs = []
+        top = item_json.get("inventory_id")
+        if top:
+            pairs.append((str(top), None))
+        for var in item_json.get("variations", []) or []:
+            inv = var.get("inventory_id")
+            if inv:
+                pairs.append((str(inv), str(var.get("id")) if var.get("id") else None))
+        # dedup preservando ordem
+        seen, out = set(), []
+        for inv, vid in pairs:
+            if inv not in seen:
+                seen.add(inv)
+                out.append((inv, vid))
+        return out
+
+    def get_fulfillment_operations(self, seller_id: str = None, inventory_id: str = None,
+                                   date_from: str = None, date_to: str = None, op_type: str = None):
+        """
+        Movimentos de estoque no Full (/stock/fulfillment/operations/search).
+        Ex.: inbound_reception, sale_confirmation. Usado para antiguidade do estoque.
+        date_from/date_to em 'YYYY-MM-DD'. Retorna lista (pode ser vazia) — best-effort.
+        """
+        params = {}
+        if seller_id:
+            params["seller_id"] = seller_id
+        if inventory_id:
+            params["inventory_id"] = inventory_id
+        if date_from:
+            params["date_from"] = date_from
+        if date_to:
+            params["date_to"] = date_to
+        if op_type:
+            params["type"] = op_type
+        try:
+            resp = self.request('GET', "/stock/fulfillment/operations/search", params=params)
+            if resp.status_code == 200:
+                data = resp.json()
+                # a API pode devolver {results:[...]} ou lista direta
+                if isinstance(data, dict):
+                    return data.get("results", data.get("operations", []))
+                return data or []
+            logger.warning(f"fulfillment operations search -> {resp.status_code} (inv={inventory_id})")
+            return []
+        except Exception as e:
+            logger.error(f"Error fetching fulfillment operations (inv={inventory_id}): {e}")
+            return []
 
     def update_item_price(self, item_id: str, new_price: float) -> dict:
         """

@@ -58,7 +58,7 @@ export function Sidebar({ isCollapsed, toggleSidebar }: SidebarProps) {
                 { name: "Forecast", href: "/supply/estoque", icon: Package },
                 { name: "Compras", href: "/supply/compras", icon: CreditCard },
                 { name: "NF-e / XML", href: "/supply/nfe", icon: Package },
-                { name: "Envio Full", href: "/supply/full", icon: Truck, disabled: true }
+                { name: "Envio Full", href: "/supply/full", icon: Truck }
             ]
         },
         {

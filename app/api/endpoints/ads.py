@@ -635,25 +635,19 @@ def _compute_shared_financials(ad, metric, days_of_stock, effective_price, varia
         daily_final = float(metric.daily_storage_fee or daily_fee)
         storage_risk = float(metric.storage_risk_cost or 0)
         
-        # DB Storage Value vs Calc
+        # FullService persists a unit cost already amortized by the observed (or
+        # explicitly labelled estimated) coverage. Recalculate only while that
+        # value does not exist, otherwise the modal would discard the Full cost.
         db_storage = float(metric.storage_cost or 0)
         if db_storage > 0:
-             # Trust DB if populated? 
-             # For consistency, if we want dynamic update based on days_stock, we should recalc.
-             # But if DB has accurate snapshot, use it?
-             # User reported DB was 0.
-             # The issue is "Calculo igual". If we ignore DB and always calc, it's consistent.
-             # Let's Always Calc to be safe and consistent with List View Fix.
-             pass
+            storage_total = db_storage
 
-    # Calculate Storage
-    curr_days = float(days_of_stock or 30)
-    avg_days_stock = curr_days / 2
-    
-    storage_total = (daily_final * avg_days_stock) + inbound_final
-    
-    if curr_days > 120:
-        storage_risk += (curr_days - 120) * (daily_final * 3)
+    # Fallback for products without a Full-derived unit cost yet. Long-term risk
+    # is only stored by FullService after a real CD-age observation; never infer
+    # it from generic coverage days.
+    if storage_total <= 0:
+        curr_days = float(days_of_stock or 30)
+        storage_total = (daily_final * (curr_days / 2)) + inbound_final
 
     # 4. Net Margin Calc
     # NOTE: ads_spend_30d is intentionally EXCLUDED from margin calculation
@@ -838,27 +832,22 @@ def update_target_margin(ad_id):
             avg_return_cost = float(financial_metric.avg_return_cost or 20.0)
             extra_fixed_cost += (risk_rate * avg_return_cost)
             
-            # 3. Storage Cost (Total Unit Economics)
-            # Use logic from _calculate_detailed_financials or simple metric access
-            # Ideally verify if storage_cost is pre-calculated or needs dynamic calc
-            # For robustness, we use dynamic logic if values missing
-            
+            # 3. Preserve the Full-derived amortized cost when it exists rather
+            # than applying the generic listing coverage a second time.
             daily_fee = float(financial_metric.daily_storage_fee or 0.007)
             inbound_est = float(financial_metric.inbound_freight_cost or 0.50)
-            
-            days_stock = float(ad.days_of_stock or 30)
-            avg_days_stock = days_stock / 2
-            
-            calc_storage = (daily_fee * avg_days_stock)
-            
-            # Add to costs
-            # We treat Inbound from metric as Inbound Cost
             extra_inbound_cost = inbound_est
+
+            stored_storage = float(financial_metric.storage_cost or 0)
+            if stored_storage > 0:
+                # storage_cost includes inbound; preserve the margin calculator's
+                # split by assigning only the remainder to fixed costs.
+                extra_fixed_cost += max(0.0, stored_storage - inbound_est)
+            else:
+                days_stock = float(ad.days_of_stock or 30)
+                extra_fixed_cost += daily_fee * (days_stock / 2)
             
-            # We treat Daily Storage as Fixed Cost per Unit (simplified)
-            extra_fixed_cost += calc_storage
-            
-            # 4. Storage Risk (Long Term)
+            # 4. Only Full can populate a long-term storage risk.
             extra_fixed_cost += float(financial_metric.storage_risk_cost or 0)
 
         # Merge Costs

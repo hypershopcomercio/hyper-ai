@@ -24,10 +24,29 @@ def run_daily_sync():
     # 3. Sync Metrics (Visits, Sales, Conversion)
     engine.sync_metrics()
 
+    # 3b. Sync estoque no Full + custo real de armazenagem (alimenta o financeiro)
+    run_full_sync()
+
     # 4. Motor de decisão de Ads: gera recomendações, mede outcomes e notifica
     run_ads_decision_engine()
 
     logger.info("Scheduler: Daily Sync Job Finished.")
+
+
+def run_full_sync():
+    """Sincroniza estoque no Full e recalcula custo real de armazenagem/inbound."""
+    from app.core.database import SessionLocal
+    db = SessionLocal()
+    try:
+        from app.services.full_service import FullService
+        svc = FullService(db=db)
+        result = svc.sync_and_cost()
+        logger.info(f"Full sync: {result}")
+    except Exception as e:
+        logger.error(f"Full sync job failed: {e}")
+        db.rollback()
+    finally:
+        db.close()
 
 
 def run_ads_decision_engine():

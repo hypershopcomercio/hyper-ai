@@ -9,3 +9,4 @@ from app.models.fiscal import MonthlyTaxConfig, ProductTaxProfile, ProductPurcha
 from app.models.nfe import NfeImport, NfeItem, NfeReconciliation
 from app.models.ml_ads_item_daily import MlAdsItemDaily
 from app.models.ads_recommendation import AdsRecommendation
+from app.models.full import FullInventory, FullStockDaily, FullStorageTariff
