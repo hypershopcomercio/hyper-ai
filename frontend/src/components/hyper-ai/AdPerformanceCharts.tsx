@@ -22,9 +22,10 @@ export function AdPerformanceCharts({ ad }: Props) {
         return sortedHistory.slice(-daysToKeep).map(day => ({
             date: new Date(day.date).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
             fullDate: new Date(day.date).toLocaleDateString('pt-BR'),
-            visits: day.visits,
-            sales: day.sales,
-            revenue: day.revenue || 0,
+            visits: Number(day.visits) || 0,
+            sales: Number(day.sales) || 0,
+            // sales_revenue vem como string (DECIMAL) — Number() evita concatenação
+            revenue: Number(day.revenue) || 0,
             conversion: day.visits > 0 ? (day.sales / day.visits * 100) : 0
         }));
     }, [ad, dateRange]);
