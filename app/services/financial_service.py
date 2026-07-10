@@ -5,6 +5,7 @@ from app.models.ml_order import MlOrder, MlOrderItem
 from app.models.financial import FixedCost, ProductFinancialMetric
 from app.models.ad import Ad
 from app.models.supply import PurchaseOrder, PurchaseStatus
+from app.services.financial_classification import is_debt_service
 import logging
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,12 @@ class FinancialService:
         logger.info("Iniciando cálculo de métricas financeiras...")
         
         # 1. Calcular Custo Fixo Total
-        total_fixed_cost = self.db.query(func.sum(FixedCost.amount)).filter(FixedCost.active == True).scalar() or 0
+        # Parcelas e empréstimos pressionam caixa, mas não são custo da operação.
+        total_fixed_cost = sum(
+            float(cost.amount or 0)
+            for cost in self.db.query(FixedCost).filter(FixedCost.active == True).all()
+            if not is_debt_service(cost.category)
+        )
         logger.info(f"Custo Fixo Total Mensal da Operação: R$ {total_fixed_cost:.2f}")
 
         # Definir janelas de tempo

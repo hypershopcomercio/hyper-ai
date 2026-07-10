@@ -4885,3 +4885,47 @@
 
 [DEBUG] 2026-01-18 21:38:19.784516 - Loaded 27 orders for period 1
 [DEBUG] StartUTC: 2026-01-18 03:00:00, EndUTC: 2026-01-19 02:59:59
+
+[DEBUG] 2026-07-02 22:53:56 - Dashboard Access - Period: 7
+[DEBUG] StartUTC: 2026-06-25 03:00:00, EndUTC: 2026-07-03 01:53:56.820164
+[DEBUG] Orders Found: 1
+
+[DEBUG] 2026-07-06 18:18:40 - Dashboard Access - Period: 1
+[DEBUG] StartUTC: 2026-07-06 03:00:00, EndUTC: 2026-07-07 02:59:59
+[DEBUG] Orders Found: 0
+
+[DEBUG] 2026-07-06 18:18:42 - Dashboard Access - Period: 1
+[DEBUG] StartUTC: 2026-07-06 03:00:00, EndUTC: 2026-07-07 02:59:59
+[DEBUG] Orders Found: 0
+
+[DEBUG] 2026-07-06 18:18:50 - Dashboard Access - Period: 1
+[DEBUG] StartUTC: 2026-07-06 03:00:00, EndUTC: 2026-07-07 02:59:59
+[DEBUG] Orders Found: 0
+
+[DEBUG] 2026-07-06 18:19:00 - Dashboard Access - Period: 1
+[DEBUG] StartUTC: 2026-07-06 03:00:00, EndUTC: 2026-07-07 02:59:59
+[DEBUG] Orders Found: 0
+
+[DEBUG] 2026-07-06 18:19:10 - Dashboard Access - Period: 1
+[DEBUG] StartUTC: 2026-07-06 03:00:00, EndUTC: 2026-07-07 02:59:59
+[DEBUG] Orders Found: 0
+
+[DEBUG] 2026-07-06 18:19:20 - Dashboard Access - Period: 1
+[DEBUG] StartUTC: 2026-07-06 03:00:00, EndUTC: 2026-07-07 02:59:59
+[DEBUG] Orders Found: 0
+
+[DEBUG] 2026-07-06 18:19:30 - Dashboard Access - Period: 1
+[DEBUG] StartUTC: 2026-07-06 03:00:00, EndUTC: 2026-07-07 02:59:59
+[DEBUG] Orders Found: 0
+
+[DEBUG] 2026-07-06 18:19:40 - Dashboard Access - Period: 1
+[DEBUG] StartUTC: 2026-07-06 03:00:00, EndUTC: 2026-07-07 02:59:59
+[DEBUG] Orders Found: 0
+
+[DEBUG] 2026-07-06 18:19:50 - Dashboard Access - Period: 1
+[DEBUG] StartUTC: 2026-07-06 03:00:00, EndUTC: 2026-07-07 02:59:59
+[DEBUG] Orders Found: 0
+
+[DEBUG] 2026-07-06 18:20:00 - Dashboard Access - Period: 1
+[DEBUG] StartUTC: 2026-07-06 03:00:00, EndUTC: 2026-07-07 02:59:59
+[DEBUG] Orders Found: 0

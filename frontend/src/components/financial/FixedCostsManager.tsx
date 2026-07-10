@@ -142,7 +142,12 @@ export function FixedCostsManager() {
         }
     };
 
-    const totalMonthly = costs.reduce((sum, c) => sum + c.amount, 0);
+    const debtServiceMonthly = costs
+        .filter(c => c.category === 'debt_service')
+        .reduce((sum, c) => sum + c.amount, 0);
+    const operatingMonthly = costs
+        .filter(c => c.category !== 'debt_service')
+        .reduce((sum, c) => sum + c.amount, 0);
 
     return (
         <div className="space-y-6">
@@ -150,13 +155,18 @@ export function FixedCostsManager() {
             <div className="bg-[#13141b] rounded-xl p-6 border border-white/5 bg-gradient-to-br from-[#13141b] to-emerald-900/10">
                 <div className="flex items-center justify-between">
                     <div>
-                        <p className="text-sm text-slate-400 font-medium">Custo Fixo Mensal Total</p>
+                            <p className="text-sm text-slate-400 font-medium">Custo Operacional Mensal</p>
                         <h2 className="text-3xl font-bold text-white mt-1">
-                            {formatCurrency(totalMonthly)}
+                            {formatCurrency(operatingMonthly)}
                         </h2>
                         <p className="text-xs text-slate-500 mt-2">
-                            Base para cálculo de ponto de equilíbrio
-                        </p>
+                            Base para margem e ponto de equilíbrio
+                            </p>
+                            {debtServiceMonthly > 0 && (
+                                <p className="text-xs text-amber-400 mt-1">
+                                    Serviço da dívida no caixa: {formatCurrency(debtServiceMonthly)}/mês
+                                </p>
+                            )}
                     </div>
                     <div className="bg-emerald-500/10 p-4 rounded-full border border-emerald-500/20">
                         <DollarSign size={32} className="text-emerald-400" />
@@ -226,6 +236,7 @@ export function FixedCostsManager() {
                                 <option value="personnel">Pessoal/Sócios</option>
                                 <option value="software">Software/Serviços</option>
                                 <option value="marketing">Marketing/Ads</option>
+                                <option value="debt_service">Serviço da dívida / Parcelas</option>
                             </select>
                         </div>
                         <div>
@@ -307,6 +318,7 @@ export function FixedCostsManager() {
                                                     <option value="personnel">Pessoal</option>
                                                     <option value="software">Software</option>
                                                     <option value="marketing">Marketing</option>
+                                                    <option value="debt_service">Serviço da dívida / Parcelas</option>
                                                 </select>
                                             </td>
                                             <td className="py-3 px-4 text-right">
@@ -343,7 +355,8 @@ export function FixedCostsManager() {
                                                     <Tag size={12} className="text-slate-500" />
                                                     <span className="text-xs text-slate-400 capitalize">
                                                         {cost.category === 'personnel' ? 'Pessoal' :
-                                                            cost.category === 'software' ? 'Software' : cost.category}
+                                                            cost.category === 'software' ? 'Software' :
+                                                            cost.category === 'debt_service' ? 'Serviço da dívida' : cost.category}
                                                     </span>
                                                 </div>
                                             </td>

@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
+      "port": 3000
+    },
+    {
+      "name": "backend",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["C:\\Users\\Michel\\AppData\\Local\\Temp\\claude\\C--Users-Michel-Documents-hyper-ai\\92a8ac96-779a-4b64-9e57-e4dd911c41a9\\scratchpad\\run_backend.py"],
+      "port": 5000
+    }
+  ]
+}

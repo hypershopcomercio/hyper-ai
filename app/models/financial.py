@@ -13,7 +13,7 @@ class FixedCost(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(100), nullable=False)
     amount = Column(Numeric(10, 2), nullable=False) # Valor mensal
-    category = Column(String(50)) # operational, administrative, personnel, taxes
+    category = Column(String(50)) # operational, administrative, personnel, debt_service
     
     # Configuração de recorrência
     active = Column(Boolean, default=True)

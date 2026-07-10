@@ -64,6 +64,7 @@ def get_finance_context(db) -> dict:
     from app.models.financial import FixedCost
     from app.models.ml_order import MlOrder, MlOrderItem
     from app.models.system_config import SystemConfig
+    from app.services.financial_classification import is_debt_service
     from sqlalchemy import func as sqlfunc
 
     ctx = {
@@ -75,9 +76,11 @@ def get_finance_context(db) -> dict:
         "complete": False,
     }
     try:
-        fixed_monthly = float(db.query(sqlfunc.sum(FixedCost.amount)).filter(
-            FixedCost.active == True  # noqa: E712
-        ).scalar() or 0)
+        fixed_monthly = sum(
+            float(cost.amount or 0)
+            for cost in db.query(FixedCost).filter(FixedCost.active == True).all()  # noqa: E712
+            if not is_debt_service(cost.category)
+        )
 
         cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=30)
         revenue_30d = float(db.query(

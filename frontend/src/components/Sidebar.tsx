@@ -74,6 +74,7 @@ export function Sidebar({ isCollapsed, toggleSidebar }: SidebarProps) {
             icon: Wallet,
             items: [
                 { name: "Dashboard", href: "/finance", icon: BarChart2 },
+                { name: "Fluxo de Caixa", href: "/finance/cashflow", icon: Wallet },
                 { name: "Custos Fixos", href: "/financial/settings", icon: Settings }
             ]
         },
