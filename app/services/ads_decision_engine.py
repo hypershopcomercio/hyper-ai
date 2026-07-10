@@ -467,28 +467,37 @@ class AdsDecisionEngine:
 
     def execute_recommendation(self, rec) -> tuple:
         """
-        Executa uma recomendação ACEITA. Retorna (ok: bool, message: str).
-        Regra crítica: só roda com ADS_WRITE_ENABLED=true e só ações do
-        catálogo executável (v1: pausar).
+        Executa uma recomendação ACEITA. Retorna (executed: bool, message: str).
+
+        NOTA (2026-07-09): o MLB não tem endpoint documentado de escrita para
+        status de Product Ads. Toda ação é encaminhada para execução MANUAL pelo
+        usuário (Plano B — WhatsApp orienta). A recomendação aceita fica com
+        status 'accepted' (NÃO 'failed', para não poluir o feedback loop). O
+        flag ADS_WRITE_ENABLED e o caminho de escrita ficam prontos para o dia
+        em que o ML publicar/autorizar um endpoint oficial.
         """
         from app.services.meli_api import MeliApiService
 
         if rec.action_code not in EXECUTABLE_ACTIONS:
-            return False, f"Ação '{rec.action_code}' não é executável automaticamente — faça manualmente no painel do ML."
-        if not ads_write_enabled():
-            return False, "Escrita de Ads desabilitada (ADS_WRITE_ENABLED=false). Recomendação aceita; execute manualmente ou habilite a flag."
+            return False, f"Ação '{rec.action_code}' — execute manualmente no painel do Mercado Ads."
 
+        if not ads_write_enabled():
+            return False, "Recomendação aceita. Execute a ação no painel do Mercado Ads (o WhatsApp traz o link e o código)."
+
+        # Flag ligada: tenta a via oficial. Hoje isso é um no-op de rede
+        # (manual_required), então NUNCA sonda endpoint não-documentado.
         meli = MeliApiService(self.db)
         result = meli.update_product_ad_status(rec.item_id, "paused")
-        rec.executed_at = datetime.datetime.utcnow()
-        rec.execution_result = json.dumps(result, ensure_ascii=False)[:2000]
+
         if result.get("ok"):
+            rec.executed_at = datetime.datetime.utcnow()
+            rec.execution_result = json.dumps(result, ensure_ascii=False)[:2000]
             rec.status = "executed"
             self.db.commit()
             return True, f"Anúncio {rec.item_id} pausado no Product Ads."
-        rec.status = "failed"
-        self.db.commit()
-        return False, f"Falha ao pausar {rec.item_id}: HTTP {result.get('status_code')} {str(result.get('body'))[:200]}"
+
+        # Sem execução automática -> permanece 'accepted' para o Plano B (manual).
+        return False, "Recomendação aceita. Execute a ação no painel do Mercado Ads (o WhatsApp traz o link e o código)."
 
     # ---------- Feedback loop ----------
 

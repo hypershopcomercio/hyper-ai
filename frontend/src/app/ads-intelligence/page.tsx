@@ -285,9 +285,7 @@ export default function AdsIntelligencePage() {
                             <Bot size={16} /> Recomendações Pendentes ({recs.length})
                         </h3>
                         <span className="text-[10px] text-slate-500">
-                            {writeEnabled
-                                ? "Execução automática LIGADA — aceitar 'Pausar' executa no ML na hora"
-                                : "Execução automática desligada — aceitar registra a decisão para você executar no painel do ML"}
+                            Aceitar registra a decisão e envia o passo a passo por WhatsApp — a execução é feita por você no painel do Mercado Ads (a API do ML não oferece escrita de Ads para apps).
                         </span>
                     </div>
                     {recFeedback && (

@@ -476,75 +476,32 @@ class MeliApiService:
 
     def update_product_ad_status(self, item_id: str, status: str):
         """
-        ESCRITA no Product Ads: muda o status de um anúncio (paused/active).
-        Chamada SOMENTE pelo AdsDecisionEngine com ADS_WRITE_ENABLED=true.
+        Mudança de status de Product Ad (paused/active).
 
-        Formato OFICIAL (doc de gestão de Product Ads): PUT batch na coleção
-          PUT /marketplace/advertising/{SITE}/advertisers/{ID}/product_ads/ads?channel=marketplace
-          body {"target": ["MLB..."], "payload": {"status": "paused"}}
-        Fallback: PUT direto no recurso do item (variante observada em prod).
-        Autodescoberta cacheada em system_config.ads_write_path_variant.
+        DECISÃO DE SEGURANÇA (2026-07-09): a documentação oficial de Product Ads
+        para MLB cobre APENAS leitura/monitoramento (GET/métricas). NÃO há
+        endpoint de escrita (PUT de status) documentado e confirmado para o site
+        MLB. Testes em produção contra rotas candidatas retornaram 401/503, o que
+        indica endpoint não suportado/não autorizado para o nosso app.
+
+        Por política do projeto e para JAMAIS colocar a conta em risco, NÃO
+        sondamos endpoints não-documentados. Esta função é intencionalmente um
+        no-op de rede: retorna 'manual required' e o fluxo cai no Plano B
+        (recomendação executada manualmente pelo usuário no painel do Mercado
+        Ads, com orientação via WhatsApp).
+
+        Reativar SÓ quando o ML publicar/confirmar um endpoint oficial de escrita
+        e nosso app estiver autorizado — aí reintroduzir a chamada exatamente
+        conforme a documentação.
         """
-        from app.models.system_config import SystemConfig
-        db = self.db_session
-        local_session = False
-        if not db:
-            from app.core.database import SessionLocal
-            db = SessionLocal()
-            local_session = True
-
-        try:
-            advertiser_id = self.get_advertiser_id()
-            candidates = []
-            if advertiser_id:
-                candidates.append((
-                    "batch_marketplace",
-                    f"/marketplace/advertising/MLB/advertisers/{advertiser_id}/product_ads/ads",
-                    {"channel": "marketplace"},
-                    {"target": [item_id], "payload": {"status": status}},
-                ))
-            candidates.append((
-                "items",
-                f"/advertising/product_ads/items/{item_id}",
-                None,
-                {"status": status},
-            ))
-
-            cached = db.query(SystemConfig).filter_by(key="ads_write_path_variant").first()
-            if cached and cached.value:
-                candidates.sort(key=lambda c: 0 if c[0] == cached.value else 1)
-
-            last = {"ok": False, "status_code": None, "body": None}
-            for variant, endpoint, params, body_payload in candidates:
-                response = self.request('PUT', endpoint, params=params, json_data=body_payload,
-                                        extra_headers={"Api-Version": "2"}, max_retries=1)
-                if response is None:
-                    last = {"ok": False, "status_code": None, "body": "sem resposta"}
-                    continue
-                if response.status_code in (200, 201, 204):
-                    if not cached:
-                        db.add(SystemConfig(key="ads_write_path_variant", value=variant, group="cache"))
-                    else:
-                        cached.value = variant
-                    db.commit()
-                    body = None
-                    try:
-                        body = response.json()
-                    except Exception:
-                        pass
-                    logger.info(f"Product Ad {item_id} -> status '{status}' OK via variante '{variant}'.")
-                    return {"ok": True, "status_code": response.status_code, "endpoint": endpoint, "body": body}
-                last = {"ok": False, "status_code": response.status_code, "body": response.text[:300], "endpoint": endpoint}
-                # 404/405/503 = rota/serviço errado, tenta próxima variante;
-                # 401/403 (permissão) e demais erros abortam
-                if response.status_code not in (404, 405, 503):
-                    break
-
-            logger.error(f"update_product_ad_status({item_id}, {status}) falhou: {last}")
-            return last
-        finally:
-            if local_session:
-                db.close()
+        logger.info(f"update_product_ad_status({item_id}, {status}): escrita de Ads não "
+                    f"suportada pela API documentada do MLB — encaminhando para execução manual (Plano B).")
+        return {
+            "ok": False,
+            "status_code": None,
+            "manual_required": True,
+            "body": "Sem endpoint de escrita documentado para Product Ads (MLB). Execução manual no painel do Mercado Ads.",
+        }
 
     def get_shipping_cost(self, item_id: str, seller_id: str):
         """
