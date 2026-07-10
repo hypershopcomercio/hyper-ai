@@ -1260,14 +1260,16 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                 <div className="space-y-6">
                                                     {/* Protection Dashboard */}
                                                     <div className="grid grid-cols-3 gap-3">
-                                                        <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex flex-col justify-between">
-                                                            <div className="flex items-center gap-2 text-emerald-400 mb-2">
+                                                        <div className={`p-4 rounded-xl border flex flex-col justify-between ${competitorCount > 0 ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-white/5 border-white/5'}`}>
+                                                            <div className={`flex items-center gap-2 mb-2 ${competitorCount > 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
                                                                 <ShieldCheck size={18} />
                                                                 <span className="text-xs font-bold uppercase tracking-wider">Status da Blindagem</span>
                                                             </div>
                                                             <div>
-                                                                <span className="text-xl font-bold text-white block">Ativo</span>
-                                                                <span className="text-[10px] text-emerald-400/80">Monitorando 24/7</span>
+                                                                <span className="text-xl font-bold text-white block">{competitorCount > 0 ? 'Ativo' : 'Inativo'}</span>
+                                                                <span className={`text-[10px] ${competitorCount > 0 ? 'text-emerald-400/80' : 'text-slate-500'}`}>
+                                                                    {competitorCount > 0 ? `Monitorando ${competitorCount} concorrente${competitorCount > 1 ? 's' : ''}` : 'Adicione concorrentes p/ monitorar'}
+                                                                </span>
                                                             </div>
                                                         </div>
                                                         <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col justify-between">
