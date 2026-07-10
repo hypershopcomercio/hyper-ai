@@ -131,11 +131,11 @@ class FinancialService:
             
             # Mas queremos o valor UNITÁRIO para embutir no preço
             # Custo Fixo por Unidade = (Total Share) / (Qtd Vendida 30d)
-            sku_units_30d = self.db.query(func.sum(MlOrderItem.quantity)).join(MlOrder).filter(
+            sku_units_30d = float(self.db.query(func.sum(MlOrderItem.quantity)).join(MlOrder).filter(
                 MlOrderItem.sku == sku,
                 MlOrder.date_created >= date_30d,
                 MlOrder.status == 'paid'
-            ).scalar() or 1 # Evitar div zero
+            ).scalar() or 0)
             
             if sku_units_30d > 0:
                 calculated_share_value = total_share_amount / sku_units_30d
