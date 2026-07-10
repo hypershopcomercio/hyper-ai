@@ -187,6 +187,34 @@ export function AdDetailsModal({ adId, onClose }: Props) {
         }
     }
 
+    // Re-busca o anúncio (atualiza score de Saúde, financials etc.)
+    const refreshAd = async () => {
+        try {
+            const res = await api.get(`/ads/${adId}`);
+            setAd(res.data);
+        } catch (err) {
+            console.error("Erro ao recarregar anúncio:", err);
+        }
+    };
+
+    // Confirma/remove verificação manual de vídeo — endpoint REAL (grava
+    // manual_video_verified) e recarrega pra o score de Saúde refletir na hora.
+    const handleVerifyVideo = async (confirm: boolean) => {
+        try {
+            if (confirm) {
+                await api.patch(`/ads/${adId}/verify-video`);
+                toast.success("Vídeo confirmado manualmente!");
+            } else {
+                await api.delete(`/ads/${adId}/verify-video`);
+                toast.success("Confirmação de vídeo removida!");
+            }
+            await refreshAd();
+        } catch (err) {
+            console.error("Erro ao verificar vídeo:", err);
+            toast.error("Não foi possível atualizar a verificação de vídeo.");
+        }
+    };
+
 
     const handleMarginClick = () => {
         setActiveTab('margin');
@@ -1184,7 +1212,7 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                                                             <div className="ml-2 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
                                                                                                 {!criterion.met && (
                                                                                                     <button
-                                                                                                        onClick={(e) => { e.stopPropagation(); toast.success("Vídeo confirmado manualmente!"); }}
+                                                                                                        onClick={(e) => { e.stopPropagation(); handleVerifyVideo(true); }}
                                                                                                         className="p-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg transition-colors cursor-pointer"
                                                                                                         title="Confirmar Manualmente"
                                                                                                     >
@@ -1193,7 +1221,7 @@ export function AdDetailsModal({ adId, onClose }: Props) {
                                                                                                 )}
                                                                                                 {criterion.met && (
                                                                                                     <button
-                                                                                                        onClick={(e) => { e.stopPropagation(); toast.success("Confirmação de vídeo removida!"); }}
+                                                                                                        onClick={(e) => { e.stopPropagation(); handleVerifyVideo(false); }}
                                                                                                         className="p-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 rounded-lg transition-colors cursor-pointer"
                                                                                                         title="Remover Confirmação"
                                                                                                     >
