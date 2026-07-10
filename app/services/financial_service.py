@@ -50,11 +50,30 @@ class FinancialService:
         
         logger.info(f"Faturamento Total (30d): R$ {total_revenue_30d:.2f}")
 
+        metrics_created = 0
+        metrics_updated = 0
+        allocated_fixed_cost = 0.0
+
         for sku in sku_list:
-            self._process_sku(sku, total_revenue_30d, total_fixed_cost, last_30d, last_90d)
+            result = self._process_sku(
+                sku, total_revenue_30d, total_fixed_cost, last_30d, last_90d
+            )
+            if result["created"]:
+                metrics_created += 1
+            else:
+                metrics_updated += 1
+            allocated_fixed_cost += result["fixed_cost_allocated_30d"]
         
         self.db.commit()
         logger.info("Cálculo financeiro concluído.")
+        return {
+            "fixed_cost_total_monthly": float(total_fixed_cost),
+            "revenue_30d": float(total_revenue_30d),
+            "skus_processed": len(sku_list),
+            "metrics_created": metrics_created,
+            "metrics_updated": metrics_updated,
+            "fixed_cost_allocated_30d": allocated_fixed_cost,
+        }
 
     def _process_sku(self, sku: str, total_revenue_company: float, total_fixed_cost: float, date_30d: datetime, date_90d: datetime):
         """Calcula métricas específicas para um SKU e salva no banco."""
@@ -96,6 +115,7 @@ class FinancialService:
 
         revenue_share = 0.0
         calculated_share_value = 0.0
+        total_share_amount = 0.0
         
         if total_revenue_company > 0:
             revenue_share = float(sku_revenue_30d) / float(total_revenue_company)
@@ -125,6 +145,11 @@ class FinancialService:
         metric.revenue_share_30d = revenue_share
         metric.calculated_fixed_cost_share = calculated_share_value
         metric.last_calculated_at = datetime.utcnow()
+
+        return {
+            "created": metric.id is None,
+            "fixed_cost_allocated_30d": total_share_amount,
+        }
         
         # logger.debug(f"SKU {sku}: Return Rate={return_rate:.1%}, Rev Share={revenue_share:.1%}, Fixed Cost Unit=R$ {calculated_share_value:.2f}")
 

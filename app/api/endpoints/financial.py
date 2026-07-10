@@ -3,6 +3,7 @@ from app.api import api_bp
 from app.core.database import SessionLocal
 from app.models.financial import FixedCost, ProductFinancialMetric
 from app.services.financial_service import FinancialService
+from app.api.endpoints.auth import require_auth
 
 @api_bp.route("/financial/costs", methods=["GET"])
 def get_fixed_costs():
@@ -100,12 +101,13 @@ def delete_fixed_cost(cost_id):
         db.close()
 
 @api_bp.route("/financial/calculate-metrics", methods=["POST"])
+@require_auth
 def trigger_calculation():
     db = SessionLocal()
     try:
         service = FinancialService(db)
-        service.calculate_metrics()
-        return jsonify({"status": "calculation_completed"})
+        summary = service.calculate_metrics()
+        return jsonify({"status": "calculation_completed", "data": summary})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:

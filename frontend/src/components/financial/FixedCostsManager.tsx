@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '@/lib/api';
-import { Plus, Trash2, DollarSign, Calendar, Tag, Pencil, Check, X } from 'lucide-react';
+import { Plus, Trash2, DollarSign, Calendar, Tag, Pencil, Check, X, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface FixedCost {
@@ -16,6 +16,7 @@ export function FixedCostsManager() {
     const [costs, setCosts] = useState<FixedCost[]>([]);
     const [loading, setLoading] = useState(true);
     const [isAdding, setIsAdding] = useState(false);
+    const [isRecalculating, setIsRecalculating] = useState(false);
 
     // Form State
     const [newName, setNewName] = useState('');
@@ -51,12 +52,23 @@ export function FixedCostsManager() {
         return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
     };
 
-    const triggerRecalculation = async () => {
+    const triggerRecalculation = async (showSuccess = false) => {
+        setIsRecalculating(true);
         try {
-            await api.post('/financial/calculate-metrics');
-            toast.success("Métricas financeiras recalculadas!");
+            const response = await api.post('/financial/calculate-metrics');
+            if (showSuccess) {
+                const summary = response.data?.data;
+                toast.success(
+                    summary
+                        ? `Rateio atualizado: ${summary.skus_processed} SKUs sobre ${formatCurrency(summary.fixed_cost_total_monthly)}/mês.`
+                        : "Métricas financeiras recalculadas!"
+                );
+            }
         } catch (error) {
             console.error(error);
+            toast.error("Não foi possível recalcular o rateio.");
+        } finally {
+            setIsRecalculating(false);
         }
     };
 
@@ -155,13 +167,24 @@ export function FixedCostsManager() {
             {/* Actions */}
             <div className="flex justify-between items-center">
                 <h3 className="text-lg font-bold text-white">Custos Recorrentes</h3>
-                <button
-                    onClick={() => setIsAdding(!isAdding)}
-                    className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium"
-                >
-                    <Plus size={16} />
-                    Adicionar Custo
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => triggerRecalculation(true)}
+                        disabled={isRecalculating || costs.length === 0}
+                        className="flex items-center gap-2 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-50 px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+                        title="Recalcula o rateio pelos pedidos pagos dos últimos 30 dias"
+                    >
+                        <RefreshCw size={16} className={isRecalculating ? 'animate-spin' : ''} />
+                        {isRecalculating ? 'Calculando...' : 'Recalcular rateio'}
+                    </button>
+                    <button
+                        onClick={() => setIsAdding(!isAdding)}
+                        className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+                    >
+                        <Plus size={16} />
+                        Adicionar Custo
+                    </button>
+                </div>
             </div>
 
             {/* Add Form */}
