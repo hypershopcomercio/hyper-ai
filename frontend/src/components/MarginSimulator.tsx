@@ -36,10 +36,13 @@ export function MarginSimulator({ ad, simulatedPrice, pricingResolution }: Margi
     const mkp_commission = targetPrice * mkp_rate;
     const das_value = targetPrice * (das_rate / 100);
     
-    const riskLongTerm = ad.storage_risk_cost || 0;
-    const riskDevolution = ad.return_risk_cost || 0;
-    const fixedCostShare = ad.fixed_cost_share || 0;
-    const storageCostTotal = ad.storage_cost || 0;
+    // Custos operacionais vêm de ad.financials (payload de detalhe), não da raiz
+    // (que só existe na listagem) — senão a simulação subconta custo e infla o lucro.
+    const fin = ad.financials;
+    const riskLongTerm = fin?.storage_risk_cost ?? ad.storage_risk_cost ?? 0;
+    const riskDevolution = fin?.return_risk_cost ?? ad.return_risk_cost ?? 0;
+    const fixedCostShare = fin?.fixed_cost_share ?? ad.fixed_cost_share ?? 0;
+    const storageCostTotal = fin?.storage_cost ?? ad.storage_cost ?? 0;
     
     const extra_costs = riskLongTerm + riskDevolution + fixedCostShare + storageCostTotal;
     const total_cost = final_product_cost + mkp_commission + mkp_shipping + das_value + extra_costs;
@@ -152,11 +155,18 @@ export function MarginSimulator({ ad, simulatedPrice, pricingResolution }: Margi
                             <span className="font-sans">(-) Imposto DAS ({das_rate.toFixed(2)}%)</span>
                             <span className="text-rose-400/80">-{formatCurrency(das_value)}</span>
                         </div>
-                        <div className="flex justify-between text-slate-400 pb-3 border-b border-white/5">
+                        <div className="flex justify-between text-slate-400">
                             <span className="font-sans">(-) Custo Final Resolvido</span>
                             <span className="text-rose-400/80">-{formatCurrency(final_product_cost)}</span>
                         </div>
-                        
+                        {extra_costs > 0 && (
+                            <div className="flex justify-between text-slate-400" title="Armazenagem + risco de devolução + risco long-term + rateio de custo fixo">
+                                <span className="font-sans">(-) Custos operacionais</span>
+                                <span className="text-rose-400/80">-{formatCurrency(extra_costs)}</span>
+                            </div>
+                        )}
+                        <div className="pb-3 border-b border-white/5"></div>
+
                         <div className="flex justify-between items-center pt-2">
                             <span className="font-medium text-white font-sans">LUCRO LÍQUIDO</span>
                             <div className="flex items-center gap-3">
