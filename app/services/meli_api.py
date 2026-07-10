@@ -1,6 +1,7 @@
 import logging
 import requests
 import datetime
+import re
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.oauth_token import OAuthToken
@@ -626,7 +627,37 @@ class MeliApiService:
             except (KeyError, TypeError, ValueError):
                 values = None
 
-        return tuple(value * 10.0 for value in values) if values and all(value > 0 for value in values) else None
+        if values and all(value > 0 for value in values):
+            return tuple(value * 10.0 for value in values)
+
+        # Full/ME2 can omit shipping.dimensions. In that case use the seller's
+        # declared package attributes returned by the same /items response.
+        # These are package measurements, not product-description attributes.
+        attrs = {attr.get("id"): attr for attr in item_json.get("attributes", []) or []}
+
+        def attr_mm(attr_id):
+            attr = attrs.get(attr_id)
+            if not attr:
+                return None
+            struct = attr.get("value_struct") or {}
+            raw_number = struct.get("number") if isinstance(struct, dict) else None
+            raw_unit = struct.get("unit") if isinstance(struct, dict) else None
+            if raw_number is None:
+                match = re.search(r"[-+]?\d+(?:[.,]\d+)?", str(attr.get("value_name") or ""))
+                raw_number = match.group(0).replace(",", ".") if match else None
+                raw_unit = raw_unit or attr.get("value_name")
+            try:
+                value = float(raw_number)
+            except (TypeError, ValueError):
+                return None
+            if value <= 0:
+                return None
+            return value if "mm" in str(raw_unit or "").lower() else value * 10.0
+
+        dimensions = tuple(attr_mm(attr_id) for attr_id in (
+            "SELLER_PACKAGE_LENGTH", "SELLER_PACKAGE_WIDTH", "SELLER_PACKAGE_HEIGHT"
+        ))
+        return dimensions if all(value is not None for value in dimensions) else None
 
     def get_fulfillment_operations(self, seller_id: str = None, inventory_id: str = None,
                                    date_from: str = None, date_to: str = None, op_type: str = None):
