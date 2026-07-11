@@ -679,13 +679,20 @@ class MeliApiService:
             params["type"] = op_type
         try:
             resp = self.request('GET', "/stock/fulfillment/operations/search", params=params)
+            # Some Full accounts reject the type filter even when the endpoint
+            # accepts the same inventory/date query. Retry without it and let
+            # FullService select INBOUND_RECEPTION from the returned records.
+            if resp.status_code == 400 and "type" in params:
+                fallback_params = {key: value for key, value in params.items() if key != "type"}
+                resp = self.request('GET', "/stock/fulfillment/operations/search", params=fallback_params)
             if resp.status_code == 200:
                 data = resp.json()
                 # a API pode devolver {results:[...]} ou lista direta
                 if isinstance(data, dict):
                     return data.get("results", data.get("operations", []))
                 return data or []
-            logger.warning(f"fulfillment operations search -> {resp.status_code} (inv={inventory_id})")
+            detail = (resp.text or "")[:300].replace("\n", " ")
+            logger.warning(f"fulfillment operations search -> {resp.status_code} (inv={inventory_id}): {detail}")
             return []
         except Exception as e:
             logger.error(f"Error fetching fulfillment operations (inv={inventory_id}): {e}")

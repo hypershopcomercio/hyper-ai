@@ -82,9 +82,13 @@ class FullService:
             # A 180-day lookup was returning 400 for every inventory and made
             # the real ageing signal unavailable.
             date_from=(today - datetime.timedelta(days=59)).isoformat(),
-            date_to=today.isoformat(), op_type="inbound_reception")
+            date_to=today.isoformat(), op_type="INBOUND_RECEPTION")
         recs = []
         for o in ops or []:
+            # The fallback request may return all operations; only receipts can
+            # establish the age of stock currently in the FC.
+            if str(o.get("type") or "").lower() != "inbound_reception":
+                continue
             qty = int(o.get("quantity") or (o.get("detail") or {}).get("quantity") or 0)
             dt = o.get("date_created") or o.get("date") or o.get("date_time")
             if dt and qty > 0:
