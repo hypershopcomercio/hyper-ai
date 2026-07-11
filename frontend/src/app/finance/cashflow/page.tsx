@@ -17,6 +17,7 @@ interface PanelData {
         projected_inflow: number; projected_outflow: number; operating_fixed_due: number;
         debt_service_due: number; purchase_commitments: number; cash_before_debt: number;
         projected_net_change: number; minimum_accumulated_change: number;
+        minimum_accumulated_date: string | null; required_starting_cash: number;
         debt_coverage_ratio: number | null; status: string;
     };
     obligations: { monthly_debt_service: number; debt_items: { id: number; name: string; amount: number; day_of_month: number }[] };
@@ -46,6 +47,8 @@ export default function CashflowPanelPage() {
 
     const marginComplete = data.margin.status === "complete";
     const coverageOk = data.cash.status === "covered_in_projection";
+    const timingGap = data.cash.status === "timing_gap";
+    const dateBr = (date: string | null) => date ? date.split("-").reverse().join("/") : "--";
 
     return (
         <main className="min-h-screen bg-[#09090b] text-slate-100 p-6 md:p-8 space-y-6">
@@ -73,22 +76,23 @@ export default function CashflowPanelPage() {
                     </dl>
                 </section>
 
-                <section className="rounded-2xl border border-amber-500/20 bg-amber-500/[0.04] p-6">
-                    <div className="flex items-start justify-between gap-4"><div><p className="text-xs uppercase tracking-widest text-amber-300">Mundo 2: caixa</p><h2 className="text-lg font-bold mt-1">Cobertura do serviço da dívida</h2></div><Landmark className="text-amber-400" /></div>
-                    <p className={`font-mono text-4xl font-black mt-6 ${coverageOk ? "text-emerald-300" : "text-amber-300"}`}>{data.cash.debt_coverage_ratio === null ? "N/C" : `${data.cash.debt_coverage_ratio.toFixed(2)}x`}</p>
-                    <p className="text-xs text-slate-400 mt-2">{coverageOk ? "A projeção cobre as parcelas no horizonte selecionado." : data.cash.status === "not_configured" ? "Ainda não há parcelas classificadas para medir cobertura." : "A projeção indica pressão antes de cobrir as parcelas."}</p>
+                <section className={`rounded-2xl border p-6 ${timingGap ? "border-rose-500/30 bg-rose-500/[0.05]" : "border-amber-500/20 bg-amber-500/[0.04]"}`}>
+                    <div className="flex items-start justify-between gap-4"><div><p className={`text-xs uppercase tracking-widest ${timingGap ? "text-rose-300" : "text-amber-300"}`}>Mundo 2: caixa</p><h2 className="text-lg font-bold mt-1">Cobertura do serviço da dívida</h2></div><Landmark className={timingGap ? "text-rose-400" : "text-amber-400"} /></div>
+                    <p className={`font-mono text-4xl font-black mt-6 ${timingGap ? "text-rose-300" : coverageOk ? "text-emerald-300" : "text-amber-300"}`}>{timingGap ? money(data.cash.required_starting_cash) : data.cash.debt_coverage_ratio === null ? "N/C" : `${data.cash.debt_coverage_ratio.toFixed(2)}x`}</p>
+                    <p className="text-xs text-slate-400 mt-2">{timingGap ? `Reserva mínima necessária até ${dateBr(data.cash.minimum_accumulated_date)} para não faltar caixa no vencimento.` : coverageOk ? "A projeção cobre as parcelas no horizonte selecionado." : data.cash.status === "not_configured" ? "Ainda não há parcelas classificadas para medir cobertura." : "A projeção indica pressão antes de cobrir as parcelas."}</p>
                     <dl className="mt-6 space-y-3 text-sm border-t border-white/10 pt-4">
                         <Row label="Caixa projetado antes da dívida" value={money(data.cash.cash_before_debt)} />
                         <Row label="Parcelas no período" value={`- ${money(data.cash.debt_service_due)}`} negative />
+                        {timingGap && <Row label={`Menor variação em ${dateBr(data.cash.minimum_accumulated_date)}`} value={`- ${money(data.cash.required_starting_cash)}`} negative />}
                         <Row label="Compras abertas" value={`- ${money(data.cash.purchase_commitments)}`} negative />
                         <Row label="Variação projetada" value={money(data.cash.projected_net_change)} strong />
                     </dl>
                 </section>
             </div>
 
-            <section className="rounded-xl border border-white/10 bg-[#121217] p-4 flex gap-3 text-sm text-slate-300">
-                <AlertTriangle className="shrink-0 text-amber-400 mt-0.5" size={18} />
-                <p>O painel não confunde margem com caixa: parcelas ficam fora da margem operacional, mas entram no fluxo no vencimento. Como o saldo bancário inicial não está integrado, a linha representa <strong>variação projetada</strong>, não saldo final confirmado.</p>
+            <section className={`rounded-xl border p-4 flex gap-3 text-sm ${timingGap ? "border-rose-500/30 bg-rose-500/[0.07] text-rose-100" : "border-white/10 bg-[#121217] text-slate-300"}`}>
+                <AlertTriangle className={`shrink-0 mt-0.5 ${timingGap ? "text-rose-400" : "text-amber-400"}`} size={18} />
+                <p>{timingGap ? <>A operação termina o período positiva, mas a parcela vence antes do caixa se recompor: em <strong>{dateBr(data.cash.minimum_accumulated_date)}</strong> faltarão <strong>{money(data.cash.required_starting_cash)}</strong> sem saldo inicial. A cobertura total não substitui reserva de liquidez.</> : <>O painel não confunde margem com caixa: parcelas ficam fora da margem operacional, mas entram no fluxo no vencimento. Como o saldo bancário inicial não está integrado, a linha representa <strong>variação projetada</strong>, não saldo final confirmado.</>}</p>
             </section>
 
             <section className="rounded-2xl border border-white/5 bg-[#121217] p-6">

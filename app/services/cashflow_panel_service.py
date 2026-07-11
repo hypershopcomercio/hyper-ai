@@ -38,6 +38,7 @@ class CashflowPanelService:
         total_inflow = total_outflow = purchase_commitments = 0.0
         total_operating_fixed = total_debt_service = 0.0
         minimum_accumulated = 0.0
+        minimum_accumulated_date = None
 
         for item in cashflow:
             date = item["date"]
@@ -57,7 +58,10 @@ class CashflowPanelService:
             purchase_commitments += purchases
             total_operating_fixed += operating_fixed
             total_debt_service += debt_service
-            minimum_accumulated = min(minimum_accumulated, float(item["accumulated"] or 0))
+            accumulated = float(item["accumulated"] or 0)
+            if accumulated < minimum_accumulated:
+                minimum_accumulated = accumulated
+                minimum_accumulated_date = date
             timeline.append({
                 "date": date,
                 "inflow": round(inflow, 2),
@@ -66,7 +70,7 @@ class CashflowPanelService:
                 "purchases": round(purchases, 2),
                 "outflow": round(outflow, 2),
                 "net_change": round(net_change, 2),
-                "accumulated_change": round(float(item["accumulated"] or 0), 2),
+                "accumulated_change": round(accumulated, 2),
                 "details": item["details"],
             })
 
@@ -84,6 +88,12 @@ class CashflowPanelService:
                 "Nenhuma obrigação de caixa foi classificada como 'Serviço da dívida'. "
                 "Cadastre ou recategorize as parcelas para medir a cobertura."
             )
+        if minimum_accumulated < 0:
+            warnings.append(
+                f"Há um buraco de caixa projetado de R$ {abs(minimum_accumulated):.2f} em "
+                f"{minimum_accumulated_date}. A cobertura total do período não garante que "
+                "haverá saldo na data de cada vencimento."
+            )
 
         return {
             "generated_at": datetime.now(TZ_BR).isoformat(),
@@ -98,8 +108,12 @@ class CashflowPanelService:
                 "cash_before_debt": round(cash_before_debt, 2),
                 "projected_net_change": round(total_inflow - total_outflow, 2),
                 "minimum_accumulated_change": round(minimum_accumulated, 2),
+                "minimum_accumulated_date": minimum_accumulated_date,
+                "required_starting_cash": round(abs(minimum_accumulated), 2),
                 "debt_coverage_ratio": round(debt_coverage_ratio, 2) if debt_coverage_ratio is not None else None,
-                "status": self._cash_status(debt_coverage_ratio, total_debt_service),
+                "status": self._cash_status(
+                    debt_coverage_ratio, total_debt_service, minimum_accumulated
+                ),
             },
             "obligations": {
                 "monthly_debt_service": round(sum(float(cost.amount or 0) for cost in debt_costs), 2),
@@ -209,9 +223,11 @@ class CashflowPanelService:
         }
 
     @staticmethod
-    def _cash_status(debt_coverage_ratio, debt_service_due: float) -> str:
+    def _cash_status(debt_coverage_ratio, debt_service_due: float, minimum_accumulated: float) -> str:
         if debt_service_due <= 0:
             return "not_configured"
+        if minimum_accumulated < 0:
+            return "timing_gap"
         if debt_coverage_ratio is not None and debt_coverage_ratio >= 1:
             return "covered_in_projection"
         return "pressure_in_projection"
