@@ -23,6 +23,7 @@ def run_daily_sync():
         
     # 3. Sync Metrics (Visits, Sales, Conversion)
     engine.sync_metrics()
+    run_financial_metrics_calculation()
 
     # 3b. Sync estoque no Full + custo real de armazenagem (alimenta o financeiro)
     run_full_sync()
@@ -31,6 +32,28 @@ def run_daily_sync():
     run_ads_decision_engine()
 
     logger.info("Scheduler: Daily Sync Job Finished.")
+
+
+def run_financial_metrics_calculation():
+    """Refresh fixed-cost allocation after the daily order synchronization."""
+    from app.core.database import SessionLocal
+    from app.services.financial_service import FinancialService
+
+    db = SessionLocal()
+    try:
+        summary = FinancialService(db).calculate_metrics()
+        logger.info(
+            "Financial metrics sync completed: %s SKUs, R$ %.2f allocated.",
+            summary["skus_processed"],
+            summary["fixed_cost_allocated_30d"],
+        )
+        return summary
+    except Exception:
+        db.rollback()
+        logger.exception("Financial metrics sync failed.")
+        raise
+    finally:
+        db.close()
 
 
 def run_full_sync():
