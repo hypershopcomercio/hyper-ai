@@ -108,7 +108,8 @@ class FullService:
         except Exception:
             return None
 
-    def sync_full_inventory(self):
+    def sync_full_inventory(self, include_ageing: bool = False):
+        """Sync Full inventory; the rate-limited ageing history is opt-in."""
         seller_id = self.get_seller_id()
         today = datetime.date.today()
         ads = self.db.query(Ad).filter(Ad.is_full == True).all()  # noqa: E712
@@ -138,7 +139,7 @@ class FullService:
                     available, in_transit, not_available, total = self._parse_stock(payload)
                     dsales = self._daily_sales(ad)
                     days_of_stock = round(available / dsales, 1) if dsales > 0 else None
-                    oldest = self._oldest_stock_days(seller_id, inventory_id, available)
+                    oldest = self._oldest_stock_days(seller_id, inventory_id, available) if include_ageing else None
 
                     row = self.db.query(FullInventory).filter_by(inventory_id=inventory_id).first()
                     if not row:
@@ -152,7 +153,8 @@ class FullService:
                     row.not_available_qty = not_available
                     row.total_qty = total
                     row.days_of_stock = days_of_stock
-                    row.oldest_stock_days = oldest
+                    if include_ageing:
+                        row.oldest_stock_days = oldest
                     row.raw = payload
 
                     # série diária idempotente (1 linha por inventory_id x dia)
@@ -175,7 +177,7 @@ class FullService:
 
         logger.info(f"[Full] sync concluído: {processed} unidades de inventário.")
         return {"ads_full": len(ads), "inventories": processed,
-                "dimensions_updated": dimensions_updated}
+                "dimensions_updated": dimensions_updated, "ageing_requested": include_ageing}
 
     # ------------------------------------------------------------------
     # MOTOR DE CUSTO REAL
@@ -281,8 +283,8 @@ class FullService:
                     f"(CD real: {counts['full_stock']}, cobertura estimada: {counts['est_coverage']}).")
         return {"updated": updated, **counts}
 
-    def sync_and_cost(self):
+    def sync_and_cost(self, include_ageing: bool = False):
         """Roda o sync de estoque e, em seguida, o motor de custo. Usado no job diário."""
-        stock = self.sync_full_inventory()
+        stock = self.sync_full_inventory(include_ageing=include_ageing)
         cost = self.compute_full_costs()
         return {"stock": stock, "cost": cost}

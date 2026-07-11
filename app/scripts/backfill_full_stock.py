@@ -10,9 +10,15 @@ the project requires all schema changes to be applied manually.
 
 
 def main():
+    import argparse
     from app.core.database import SessionLocal
     from app.models.full import FullInventory, FullStorageTariff
     from app.services.full_service import FullService
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--include-ageing", action="store_true",
+                        help="Query the rate-limited Full operations history for real stock age.")
+    args = parser.parse_args()
 
     db = SessionLocal()
     svc = FullService(db=db)
@@ -22,7 +28,7 @@ def main():
             print("WARNING: no active tariffs in full_storage_tariffs.")
             print("Stock can be synchronized, but Full costs require configured tariffs.\n")
 
-        result = svc.sync_and_cost()
+        result = svc.sync_and_cost(include_ageing=args.include_ageing)
         stock = result["stock"]
         cost = result["cost"]
         print(f"Sync: {stock['ads_full']} Full ads, {stock['inventories']} inventory records, "
