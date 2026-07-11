@@ -637,6 +637,12 @@ class SyncEngine:
                             ts = TinyStock(sku=sku)
                             self.db.add(ts)
                         ts.quantity = qty
+                        ts.reserved = 0
+                        # Tiny returns the sellable balance in ``saldo``. Keep
+                        # the same value in the normalized field consumed by
+                        # replenishment planning and label the current source.
+                        ts.available = qty
+                        ts.warehouse = "Local (Tiny)"
                         ts.last_updated = datetime.datetime.now()
                         
                         # Update Ad Divergence

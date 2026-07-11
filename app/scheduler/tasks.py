@@ -25,6 +25,9 @@ def run_daily_sync():
     engine.sync_metrics()
     run_financial_metrics_calculation()
 
+    # 3a. Local stock is required to suggest replenishment to Full.
+    engine.sync_tiny_stock()
+
     # 3b. Sync estoque no Full + custo real de armazenagem (alimenta o financeiro)
     run_full_sync()
 
