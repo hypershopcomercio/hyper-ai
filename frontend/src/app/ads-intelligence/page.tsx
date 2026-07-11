@@ -101,6 +101,29 @@ const CLASS_META: Record<string, { label: string; color: string; bg: string; ico
 const fmtBRL = (v: number | null | undefined) =>
     (v ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+const RECOMMENDATION_ACTIONS: Record<string, { title: string; confirm: string; description: string }> = {
+    pausar: {
+        title: "Pausar Product Ads deste item",
+        confirm: "Confirmar plano de pausa",
+        description: "Ação proposta: pausar a divulgação paga deste item no Mercado Ads.",
+    },
+    reduzir_ou_pausar: {
+        title: "Pausar Product Ads deste item",
+        confirm: "Confirmar plano de pausa",
+        description: "Recomendação legada convertida para pausa: o item está em prejuízo via Ads.",
+    },
+    aumentar: {
+        title: "Avaliar aumento de investimento no Mercado Ads",
+        confirm: "Confirmar plano de aumento",
+        description: "Ação proposta: aumentar o investimento manualmente, respeitando o teto de ACOS e estoque.",
+    },
+    monitorar: {
+        title: "Não alterar a campanha; monitorar este item",
+        confirm: "Confirmar monitoramento",
+        description: "Ação proposta: manter a campanha sem alteração e revisar o desempenho no próximo ciclo.",
+    },
+};
+
 export default function AdsIntelligencePage() {
     const [data, setData] = useState<Overview | null>(null);
     const [loading, setLoading] = useState(true);
@@ -285,7 +308,7 @@ export default function AdsIntelligencePage() {
                             <Bot size={16} /> Recomendações Pendentes ({recs.length})
                         </h3>
                         <span className="text-[10px] text-slate-500">
-                            Aceitar registra a decisão e envia o passo a passo por WhatsApp — a execução é feita por você no painel do Mercado Ads (a API do ML não oferece escrita de Ads para apps).
+                            Cada card informa a ação exata. Confirmar registra sua decisão e envia o passo a passo por WhatsApp; a API oficial de Product Ads ainda não publica operações de escrita para apps.
                         </span>
                     </div>
                     {recFeedback && (
@@ -297,6 +320,11 @@ export default function AdsIntelligencePage() {
                         {recs.map(rec => {
                             const snap = rec.metrics_snapshot || {};
                             const meta = CLASS_META[rec.classification] || CLASS_META["saudavel"];
+                            const action = RECOMMENDATION_ACTIONS[rec.action_code] || {
+                                title: rec.action_code,
+                                confirm: "Confirmar ação",
+                                description: "Ação proposta pelo motor de decisão.",
+                            };
                             return (
                                 <div key={rec.id} className="bg-[#121217] border border-white/5 rounded-xl p-4 flex flex-col gap-2">
                                     <div className="flex items-start justify-between gap-2">
@@ -311,6 +339,11 @@ export default function AdsIntelligencePage() {
                                             {meta.label}
                                         </span>
                                     </div>
+                                    <div className="rounded-lg border border-violet-500/20 bg-violet-500/[0.06] px-3 py-2">
+                                        <div className="text-[9px] uppercase tracking-widest font-bold text-violet-300">Ação proposta</div>
+                                        <div className="text-xs font-bold text-white mt-0.5">{action.title}</div>
+                                        <div className="text-[10px] text-slate-400 leading-snug mt-0.5">{action.description}</div>
+                                    </div>
                                     <div className="text-[11px] text-slate-400 leading-snug">{rec.reason}</div>
                                     {rec.impact && <div className="text-[11px] font-medium text-emerald-400">{rec.impact}</div>}
                                     <div className="flex items-center gap-2 mt-1">
@@ -320,14 +353,14 @@ export default function AdsIntelligencePage() {
                                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-600/30 transition-all disabled:opacity-50"
                                         >
                                             {deciding === rec.id ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-                                            Aceitar
+                                            {action.confirm}
                                         </button>
                                         <button
                                             onClick={() => decideRecommendation(rec.id, 'reject')}
                                             disabled={deciding === rec.id}
                                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800/80 text-slate-400 border border-white/5 hover:text-white transition-all disabled:opacity-50"
                                         >
-                                            <X size={12} /> Rejeitar
+                                            <X size={12} /> Não executar
                                         </button>
                                     </div>
                                 </div>

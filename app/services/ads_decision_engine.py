@@ -203,8 +203,11 @@ def _suggest_action(classification, spend, ads_revenue, acos, margin_percent, da
         else:
             reason = f"ACOS {acos:.1f}% >= margem {margin_percent:.1f}% — cada venda via Ads dá prejuízo (resultado no período: R${loss:.2f})."
         return {
-            "code": "reduzir_ou_pausar",
-            "label": "Reduzir lance/verba ou pausar",
+            # Recomendação precisa ser executável e sem ambiguidade: com
+            # prejuízo confirmado, não deixamos a decisão entre reduzir ou
+            # pausar escondida no texto do card.
+            "code": "pausar",
+            "label": "Pausar Product Ads deste item",
             "reason": reason,
             "impact": f"Estancar perda de ~R${abs(loss) / max(days_active, 1) * 30:.2f}/mês",
         }
