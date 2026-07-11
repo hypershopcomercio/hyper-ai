@@ -78,7 +78,10 @@ class FullService:
         today = datetime.date.today()
         ops = self.meli.get_fulfillment_operations(
             seller_id=seller_id, inventory_id=inventory_id,
-            date_from=(today - datetime.timedelta(days=180)).isoformat(),
+            # The Full operations API only accepts windows shorter than 60 days.
+            # A 180-day lookup was returning 400 for every inventory and made
+            # the real ageing signal unavailable.
+            date_from=(today - datetime.timedelta(days=59)).isoformat(),
             date_to=today.isoformat(), op_type="inbound_reception")
         recs = []
         for o in ops or []:
