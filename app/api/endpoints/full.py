@@ -10,6 +10,7 @@ Endpoints do módulo Full (Fulfillment ML) — Fase 1, read-only.
 Nada escreve no ML. O custo real calculado aqui alimenta ProductFinancialMetric.
 """
 import logging
+import math
 from datetime import date, timedelta
 
 from flask import request, jsonify
@@ -20,11 +21,84 @@ from app.core.database import SessionLocal
 from app.models.ad import Ad
 from app.models.financial import ProductFinancialMetric
 from app.models.full import FullInventory, FullStockDaily, FullStorageTariff
+from app.models.tiny_stock import TinyStock
 
 logger = logging.getLogger(__name__)
 
 AGED_DEFAULT = 90       # dias — limiar de estoque antigo para os alertas do overview
 LOW_COVERAGE_DAYS = 14  # dias — cobertura baixa (risco de ruptura)
+
+
+@api_bp.route('/full/replenishment', methods=['GET'])
+def full_replenishment_recommendations():
+    """Read-only replenishment suggestions from real Full and local stock."""
+    db = SessionLocal()
+    try:
+        target_days = max(7, min(90, request.args.get('target_days', 30, type=int)))
+        trigger_days = max(1, min(target_days, request.args.get('trigger_days', 14, type=int)))
+
+        full_by_sku = {}
+        for row in db.query(FullInventory).filter(FullInventory.sku.isnot(None)).all():
+            full_by_sku[row.sku] = full_by_sku.get(row.sku, 0) + int(row.available_qty or 0)
+
+        local_by_sku, warehouses_by_sku = {}, {}
+        for row in db.query(TinyStock).filter(TinyStock.sku.isnot(None)).all():
+            quantity = int(row.available or 0)
+            local_by_sku[row.sku] = local_by_sku.get(row.sku, 0) + quantity
+            if row.warehouse:
+                warehouses_by_sku.setdefault(row.sku, []).append({
+                    "warehouse": row.warehouse, "available": quantity,
+                })
+
+        ads_by_sku = {}
+        for ad in db.query(Ad).filter(Ad.is_full == True, Ad.sku.isnot(None)).all():  # noqa: E712
+            entry = ads_by_sku.setdefault(ad.sku, {"ad": ad, "sales_30d": 0})
+            entry["sales_30d"] += int(ad.sales_30d or 0)
+
+        items = []
+        for sku, entry in ads_by_sku.items():
+            ad = entry["ad"]
+            full_available = full_by_sku.get(sku, 0)
+            local_available = local_by_sku.get(sku, 0)
+            daily_sales = entry["sales_30d"] / 30.0
+            if daily_sales <= 0:
+                continue
+            coverage_days = round(full_available / daily_sales, 1)
+            if coverage_days >= trigger_days:
+                continue
+
+            target_quantity = math.ceil(daily_sales * target_days)
+            needed = max(0, target_quantity - full_available)
+            suggested = min(needed, local_available)
+            items.append({
+                "ad_id": ad.id,
+                "sku": sku,
+                "title": ad.title,
+                "full_available": full_available,
+                "local_available": local_available,
+                "local_warehouses": warehouses_by_sku.get(sku, []),
+                "sales_30d": entry["sales_30d"],
+                "daily_sales_estimate": round(daily_sales, 2),
+                "coverage_days": coverage_days,
+                "target_full_quantity": target_quantity,
+                "quantity_needed": needed,
+                "quantity_suggested": suggested,
+                "status": "ready" if suggested > 0 else "no_local_stock",
+                "sources": {
+                    "full_available": "full_inventory (ML Full, real)",
+                    "local_available": "tiny_stock (local, real)",
+                    "velocity": "ads.sales_30d / 30 (estimate)",
+                },
+            })
+
+        items.sort(key=lambda item: item["coverage_days"])
+        return jsonify({"target_days": target_days, "trigger_days": trigger_days,
+                        "count": len(items), "items": items, "mode": "suggestion_only"})
+    except Exception as e:
+        logger.error(f"full_replenishment_recommendations: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
 
 
 @api_bp.route('/full/overview', methods=['GET'])

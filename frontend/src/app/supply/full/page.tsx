@@ -54,10 +54,22 @@ interface Tariff {
     active: boolean;
 }
 
+interface ReplenishmentItem {
+    ad_id: string;
+    sku: string;
+    title: string | null;
+    full_available: number;
+    local_available: number;
+    coverage_days: number;
+    quantity_suggested: number;
+    status: 'ready' | 'no_local_stock';
+}
+
 export default function FullPage() {
     const [overview, setOverview] = useState<Overview | null>(null);
     const [items, setItems] = useState<InvItem[]>([]);
     const [tariffs, setTariffs] = useState<Tariff[]>([]);
+    const [replenishment, setReplenishment] = useState<ReplenishmentItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [syncing, setSyncing] = useState(false);
     const [sortBy, setSortBy] = useState<'coverage' | 'aged' | 'available'>('coverage');
@@ -71,11 +83,13 @@ export default function FullPage() {
             api.get('/full/overview'),
             api.get(`/full/inventory?sort_by=${sortBy}${onlyAlerts ? '&alerts=1' : ''}`),
             api.get('/full/tariffs'),
+            api.get('/full/replenishment'),
         ])
-            .then(([ov, inv, tf]) => {
+            .then(([ov, inv, tf, rp]) => {
                 setOverview(ov.data);
                 setItems(inv.data.items || []);
                 setTariffs(tf.data.tariffs || []);
+                setReplenishment(rp.data.items || []);
             })
             .catch(err => console.error('Erro ao carregar Full', err))
             .finally(() => setLoading(false));
@@ -171,6 +185,32 @@ export default function FullPage() {
                         <AlertChip active={(a?.aged_stock ?? 0) > 0} icon={<Clock size={14} />} count={a?.aged_stock ?? 0} label="estoque antigo (>90d)" tone="amber" />
                         <AlertChip active={(a?.stranded ?? 0) > 0} icon={<Warehouse size={14} />} count={a?.stranded ?? 0} label="parado / sem giro" tone="slate" />
                     </div>
+
+                    <section className="bg-[#121217] border border-white/5 rounded-2xl overflow-hidden">
+                        <div className="p-5 border-b border-white/5 flex items-start justify-between gap-4">
+                            <div>
+                                <h2 className="text-sm font-bold text-white">Reposicao sugerida para o Full</h2>
+                                <p className="text-xs text-slate-500 mt-1">Sugestao apenas: Full e local sao dados reais; a velocidade usa as vendas dos ultimos 30 dias.</p>
+                            </div>
+                            <span className="text-xs font-mono text-sky-300 shrink-0">{replenishment.length} alerta(s)</span>
+                        </div>
+                        {replenishment.length === 0 ? (
+                            <p className="p-5 text-sm text-slate-500">Nenhuma reposicao urgente com giro registrado.</p>
+                        ) : (
+                            <div className="overflow-x-auto"><table className="w-full text-sm">
+                                <thead><tr className="text-[10px] uppercase tracking-widest text-slate-500 border-b border-white/5">
+                                    <th className="text-left px-5 py-3">Produto</th><th className="text-right px-3 py-3">Full</th><th className="text-right px-3 py-3">Local</th><th className="text-right px-3 py-3">Cobertura</th><th className="text-right px-5 py-3">Sugestao</th>
+                                </tr></thead>
+                                <tbody>{replenishment.slice(0, 12).map(item => <tr key={item.sku} className="border-b border-white/5">
+                                    <td className="px-5 py-3"><div className="text-slate-200">{item.title || item.sku}</div><div className="text-[11px] text-slate-500 font-mono">{item.sku}</div></td>
+                                    <td className="px-3 py-3 text-right font-mono text-sky-300">{fmtInt(item.full_available)}</td>
+                                    <td className="px-3 py-3 text-right font-mono text-emerald-300">{fmtInt(item.local_available)}</td>
+                                    <td className={`px-3 py-3 text-right font-mono ${coverageColor(item.coverage_days)}`}>{`${item.coverage_days.toFixed(0)}d`}</td>
+                                    <td className={`px-5 py-3 text-right font-mono font-bold ${item.status === 'ready' ? 'text-amber-300' : 'text-rose-300'}`}>{item.status === 'ready' ? `${fmtInt(item.quantity_suggested)} un` : 'Sem local'}</td>
+                                </tr>)}</tbody>
+                            </table></div>
+                        )}
+                    </section>
 
                     {/* Filters */}
                     <div className="flex items-center gap-3 flex-wrap">
