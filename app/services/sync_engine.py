@@ -803,6 +803,13 @@ class SyncEngine:
                     logger.error(f"Stock/Cost Sync failed for Tiny product {tiny_prod.id} ({sku}): {e_stock}")
                     error += 1
 
+            # Keep the legacy Ad/forecast cache in sync with the location
+            # rows. A Mercado Livre listing may represent several SKU
+            # variations, so its local balance must be the sum of those SKUs,
+            # not the last variation processed by Tiny.
+            if success:
+                self._refresh_ad_local_stock_cache()
+
             complete = not rate_limited and processed == total and error == 0
             message = (
                 "Limite de chamadas do Tiny atingido; os produtos já atualizados foram salvos e a próxima execução continua pelos mais antigos."
@@ -837,6 +844,64 @@ class SyncEngine:
             }
         finally:
             _tiny_stock_sync_lock.release()
+
+    def _refresh_ad_local_stock_cache(self):
+        """Project persisted Tiny locations back to ads and forecast rows.
+
+        The supply dashboard displays one Mercado Livre listing per row. For
+        listings with variations, the listing's local stock is the sum of its
+        Tiny variation SKUs. This projection makes the dashboard use exactly
+        the same physical balances as Venda Local.
+        """
+        stock_by_sku = {}
+        for sku, available in self.db.query(
+            TinyStock.sku, sqlalchemy.func.coalesce(sqlalchemy.func.sum(TinyStock.available), 0)
+        ).group_by(TinyStock.sku).all():
+            key = str(sku or "").strip().upper()
+            if key:
+                stock_by_sku[key] = int(available or 0)
+
+        if not stock_by_sku:
+            return
+
+        skus_by_ad_id = {}
+        for ad_id, sku in self.db.query(AdVariation.ad_id, AdVariation.sku).all():
+            key = str(sku or "").strip().upper()
+            if ad_id and key:
+                skus_by_ad_id.setdefault(ad_id, set()).add(key)
+
+        # Manual/automatic links are also valid when the listing SKU differs
+        # from the Tiny variation SKU.
+        for ad_id, sku in self.db.query(AdTinyLink.ad_id, TinyProduct.sku).join(
+            TinyProduct, TinyProduct.id == AdTinyLink.tiny_product_id
+        ).all():
+            key = str(sku or "").strip().upper()
+            if ad_id and key:
+                skus_by_ad_id.setdefault(ad_id, set()).add(key)
+
+        updated_local_by_ad_id = {}
+        for ad in self.db.query(Ad).all():
+            sku_keys = set(skus_by_ad_id.get(ad.id, set()))
+            own_sku = str(ad.sku or "").strip().upper()
+            if own_sku:
+                sku_keys.add(own_sku)
+            matched_skus = sku_keys.intersection(stock_by_sku)
+            if not matched_skus:
+                continue
+
+            local_qty = sum(stock_by_sku[sku] for sku in matched_skus)
+            ad.stock_tiny = local_qty
+            ad.stock_divergence = int(ad.available_quantity or 0) - local_qty
+            updated_local_by_ad_id[ad.id] = local_qty
+
+        if updated_local_by_ad_id:
+            from app.models.product_forecast import ProductForecast
+            for forecast in self.db.query(ProductForecast).filter(
+                ProductForecast.mlb_id.in_(list(updated_local_by_ad_id))
+            ).all():
+                forecast.stock_local = updated_local_by_ad_id[forecast.mlb_id]
+
+        self.db.commit()
 
     def _update_visits_metric(self, ad: Ad):
         # Meli API for visits

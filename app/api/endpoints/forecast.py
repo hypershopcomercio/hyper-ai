@@ -5,6 +5,7 @@ Provides sales forecast data for the dashboard
 import logging
 from flask import jsonify, request
 from datetime import datetime, timedelta
+from sqlalchemy import func
 from app.api import api_bp
 from app.core.database import SessionLocal
 from app.services.forecast import HyperForecast
@@ -2159,6 +2160,8 @@ def get_product_forecasts():
     - sort_order: asc or desc, default: desc
     """
     from app.models.product_forecast import ProductForecast
+    from app.models.tiny_stock import TinyStock
+    from app.models.ad_variation import AdVariation
     
     db = SessionLocal()
     try:
@@ -2201,6 +2204,38 @@ def get_product_forecasts():
             query = query.order_by(sort_field.desc())
         
         products = query.all()
+
+        # ``product_forecast.stock_local`` is a reporting snapshot. Read the
+        # persisted Tiny locations here so the Supply screen immediately shows
+        # the same physical local stock as Venda Local, including the sum of a
+        # listing's variations.
+        local_stock_by_sku = {}
+        for sku, available in db.query(
+            TinyStock.sku, func.coalesce(func.sum(TinyStock.available), 0)
+        ).group_by(TinyStock.sku).all():
+            key = str(sku or "").strip().upper()
+            if key:
+                local_stock_by_sku[key] = int(available or 0)
+
+        local_skus_by_mlb_id = {}
+        product_ids = [product.mlb_id for product in products]
+        if product_ids:
+            for ad_id, sku in db.query(AdVariation.ad_id, AdVariation.sku).filter(
+                AdVariation.ad_id.in_(product_ids)
+            ).all():
+                key = str(sku or "").strip().upper()
+                if ad_id and key:
+                    local_skus_by_mlb_id.setdefault(ad_id, set()).add(key)
+
+        fresh_local_stock = {}
+        for product in products:
+            sku_keys = set(local_skus_by_mlb_id.get(product.mlb_id, set()))
+            own_sku = str(product.sku or "").strip().upper()
+            if own_sku:
+                sku_keys.add(own_sku)
+            matched_skus = sku_keys.intersection(local_stock_by_sku)
+            if matched_skus:
+                fresh_local_stock[product.mlb_id] = sum(local_stock_by_sku[sku] for sku in matched_skus)
         
         # Calculate totals
         total_forecast = sum(float(p.forecast_revenue_today or 0) for p in products)
@@ -2238,7 +2273,7 @@ def get_product_forecasts():
                         "trend_pct": float(p.trend_pct or 0),
                         "stock_current": p.stock_current,
                         "stock_full": p.stock_full,
-                        "stock_local": p.stock_local,
+                        "stock_local": fresh_local_stock.get(p.mlb_id, p.stock_local),
                         "stock_incoming": p.stock_incoming,
                         "days_of_coverage": float(p.days_of_coverage or 0),
                         "stock_status": p.stock_status,
