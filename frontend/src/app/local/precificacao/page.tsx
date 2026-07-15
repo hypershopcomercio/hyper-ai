@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Calculator, CheckCircle2, Filter, PackageSearch, Printer, RefreshCw, Save, Search, Tags, TriangleAlert } from "lucide-react";
+import { Calculator, CheckCircle2, PackageSearch, Printer, RefreshCw, Save, Search, Tags, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 
@@ -26,7 +26,6 @@ export default function LocalPricingPage() {
     const [products, setProducts] = useState<PricingProduct[]>([]);
     const [margin, setMargin] = useState("10");
     const [search, setSearch] = useState("");
-    const [onlyBac, setOnlyBac] = useState(false);
     const [loading, setLoading] = useState(true);
     const [savingAll, setSavingAll] = useState(false);
     const [edits, setEdits] = useState<Record<string, string>>({});
@@ -37,7 +36,6 @@ export default function LocalPricingPage() {
         try {
             const params = new URLSearchParams({ margin: String(numericMargin) });
             if (search.trim()) params.set("q", search.trim());
-            if (onlyBac) params.set("only_bac", "true");
             const response = await api.get(`/local/products?${params.toString()}`);
             setProducts(response.data.data || []);
             setEdits({});
@@ -49,7 +47,7 @@ export default function LocalPricingPage() {
         }
     };
 
-    useEffect(() => { void loadProducts(); }, [onlyBac]);
+    useEffect(() => { void loadProducts(); }, []);
 
     const displayed = useMemo(() => products, [products]);
     const readyCount = displayed.filter(product => product.status === "ready" && product.selling_price > 0).length;
@@ -106,7 +104,7 @@ export default function LocalPricingPage() {
                 <section className="rounded-2xl border border-violet-500/15 bg-gradient-to-r from-violet-950/25 to-[#111218] p-5 no-print">
                     <div className="grid grid-cols-1 lg:grid-cols-[auto_1fr_auto] gap-4 items-end">
                         <label className="text-xs text-slate-400">Margem desejada (%)<div className="mt-1.5 flex items-center rounded-lg border border-violet-500/30 bg-black/20 px-3"><Calculator className="w-4 h-4 text-violet-300" /><input type="number" min="0" max="99" step="0.1" value={margin} onChange={event => setMargin(event.target.value)} className="w-24 bg-transparent px-2 py-2.5 outline-none text-white" /><button onClick={() => void loadProducts()} className="text-xs text-violet-300 hover:text-violet-100">Simular</button></div></label>
-                        <div className="flex flex-col sm:flex-row gap-3"><div className="flex-1 flex items-center rounded-lg border border-slate-700 bg-black/20 px-3"><Search className="w-4 h-4 text-slate-500" /><input value={search} onChange={event => setSearch(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void loadProducts(); }} placeholder="Filtrar por produto ou SKU" className="w-full bg-transparent px-2 py-2.5 text-sm outline-none" /></div><label className="flex items-center gap-2 text-sm text-slate-300 whitespace-nowrap"><input type="checkbox" checked={onlyBac} onChange={event => setOnlyBac(event.target.checked)} className="accent-violet-500" /> Apenas BAC</label></div>
+                        <div className="flex flex-col sm:flex-row gap-3"><div className="flex-1 flex items-center rounded-lg border border-slate-700 bg-black/20 px-3"><Search className="w-4 h-4 text-slate-500" /><input value={search} onChange={event => setSearch(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void loadProducts(); }} placeholder="Filtrar por produto ou SKU" className="w-full bg-transparent px-2 py-2.5 text-sm outline-none" /></div></div>
                         <button disabled={savingAll || !displayed.length} onClick={() => void applyBulkPricing()} className="rounded-xl bg-violet-500 px-5 py-3 text-sm font-bold text-white hover:bg-violet-400 disabled:opacity-50 flex items-center justify-center gap-2"><Tags className="w-4 h-4" /> {savingAll ? "Aplicando..." : "Aplicar à tabela"}</button>
                     </div>
                     <p className="mt-3 text-xs text-slate-400">Fórmula: custo final ÷ (1 − margem − DAS). Comissão e frete de marketplace não entram no preço local.</p>
