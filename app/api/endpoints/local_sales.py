@@ -156,6 +156,7 @@ def _catalog_rows(db, search=None, only_bac=False, requested_margin=None):
             "name": name,
             "tiny_product_id": product.id,
             "ad_id": ad.id if ad else None,
+            "thumbnail": ad.thumbnail if ad and ad.thumbnail else None,
             "stock_available": stock_by_sku.get(sku, int(product.stock or 0)),
             "tiny_cost": _money(product.cost),
             "has_fiscal_profile": bool(ad and db.query(ProductTaxProfile.id).filter(

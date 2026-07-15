@@ -8,6 +8,7 @@ import { api } from "@/lib/api";
 type Product = {
     sku: string;
     name: string;
+    thumbnail?: string | null;
     stock_available: number;
     selling_price: number;
     status: string;
@@ -178,7 +179,14 @@ export default function LocalSalesPage() {
                                 <div className="absolute z-20 mt-2 w-full overflow-hidden rounded-xl border border-slate-700 bg-[#181923] shadow-2xl">
                                     {matches.length ? matches.map(product => (
                                         <button key={product.sku} onClick={() => addProduct(product)} className="w-full flex items-center justify-between gap-4 px-4 py-3 text-left hover:bg-cyan-500/10 border-b border-white/5 last:border-0">
-                                            <span className="min-w-0"><span className="block text-sm font-medium truncate">{product.name}</span><span className="text-xs text-slate-500">{product.sku} · Estoque {product.stock_available}</span></span>
+                                            <span className="flex items-center gap-3 min-w-0">
+                                                {product.thumbnail ? (
+                                                    <img src={product.thumbnail} alt="" className="h-11 w-11 shrink-0 rounded-lg border border-white/10 bg-white object-cover" />
+                                                ) : (
+                                                    <span className="h-11 w-11 shrink-0 rounded-lg border border-white/10 bg-white/5 flex items-center justify-center"><PackageSearch className="w-5 h-5 text-slate-500" /></span>
+                                                )}
+                                                <span className="min-w-0"><span className="block text-sm font-medium truncate">{product.name}</span><span className="text-xs text-slate-500">{product.sku} · Estoque {product.stock_available}</span></span>
+                                            </span>
                                             <span className="font-semibold text-cyan-300 whitespace-nowrap">{money(product.selling_price)}</span>
                                         </button>
                                     )) : <p className="px-4 py-4 text-sm text-slate-400">Nenhum produto encontrado.</p>}
