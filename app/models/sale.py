@@ -8,6 +8,9 @@ class Sale(Base):
     id = Column(String(255), primary_key=True) # Order ID
     date_created = Column(DateTime(timezone=True), index=True)
     seller_id = Column(String(255))
+    # Channel is intentionally separate from the imported order identifier.
+    # Existing records are Mercado Livre; local receipts live in local_sales.
+    channel_key = Column(String(50), nullable=False, default="mercado_livre", index=True)
     item_id = Column(String(255), ForeignKey("ads.id"), index=True)
     status = Column(String(100))
     

@@ -16,7 +16,9 @@ import {
     LogOut,
     Brain,
     Wallet,
-    Megaphone
+    Megaphone,
+    Store,
+    Tags
 } from "lucide-react";
 import { useState, useEffect } from "react";
 
@@ -76,6 +78,14 @@ export function Sidebar({ isCollapsed, toggleSidebar }: SidebarProps) {
                 { name: "Dashboard", href: "/finance", icon: BarChart2 },
                 { name: "Fluxo de Caixa", href: "/finance/cashflow", icon: Wallet },
                 { name: "Custos Fixos", href: "/financial/settings", icon: Settings }
+            ]
+        },
+        {
+            name: "Operação",
+            icon: Store,
+            items: [
+                { name: "Venda Local", href: "/local/vendas", icon: Store },
+                { name: "Preços Locais", href: "/local/precificacao", icon: Tags }
             ]
         },
         {

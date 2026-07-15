@@ -630,6 +630,18 @@ class SyncEngine:
                         # stock_data is dict: {id, nome, codigo, saldo, ...}
                         # "saldo" is the quantity
                         qty = int(stock_data.get("saldo", 0))
+
+                        # Local POS sales are recorded immediately in Hyper AI.
+                        # Until the Tiny write integration is enabled, preserve
+                        # those pending deltas when Tiny refreshes its raw saldo.
+                        from app.models.local_sales import InventoryMovement
+                        pending_delta = sum(
+                            int(m.quantity_delta or 0)
+                            for m in self.db.query(InventoryMovement).filter(
+                                InventoryMovement.sku == sku,
+                                InventoryMovement.sync_status == "pending",
+                            ).all()
+                        )
                         
                         # Upsert TinyStock
                         ts = self.db.query(TinyStock).filter(TinyStock.sku == sku).first()
@@ -641,8 +653,8 @@ class SyncEngine:
                         # Tiny returns the sellable balance in ``saldo``. Keep
                         # the same value in the normalized field consumed by
                         # replenishment planning and label the current source.
-                        ts.available = qty
-                        ts.warehouse = "Local (Tiny)"
+                        ts.available = qty + pending_delta
+                        ts.warehouse = "Local (Tiny + Hyper)" if pending_delta else "Local (Tiny)"
                         ts.last_updated = datetime.datetime.now()
                         
                         # Update Ad Divergence
