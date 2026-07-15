@@ -10,6 +10,11 @@ from app.models.system_config import SystemConfig
 class TinyApiService:
     def __init__(self):
         self.base_url = "https://api.tiny.com.br/api2"
+        # The API returns rate-limit information in the response rather than
+        # as an HTTP error. Keep it available to the synchronizer so it can
+        # stop cleanly instead of continuing to hammer Tiny after a block.
+        self.last_error = None
+        self.last_rate_limit = None
         self._load_token()
         
     def _load_token(self):
@@ -105,16 +110,29 @@ class TinyApiService:
         # Correct approach: SyncEngine passes the ID.
         
         try:
-             response = requests.post(url, data=params)
+             self.last_error = None
+             response = requests.post(url, data=params, timeout=30)
              response.raise_for_status()
+             limit_header = response.headers.get("x-limit-api")
+             try:
+                 self.last_rate_limit = int(limit_header) if limit_header else None
+             except (TypeError, ValueError):
+                 self.last_rate_limit = None
              data = response.json()
              
              if data.get("retorno", {}).get("status") == "Erro":
-                  # Try searching if ID fail? No, caller handles it.
-                  logger.warning(f"Tiny Stock Error for product {tiny_id}: {data['retorno'].get('erros')}")
+                  response_data = data.get("retorno", {})
+                  error_code = str(response_data.get("codigo_erro") or "")
+                  self.last_error = {
+                      "code": error_code,
+                      "errors": response_data.get("erros") or [],
+                      "rate_limited": error_code in {"6", "11"},
+                  }
+                  logger.warning(f"Tiny Stock Error for product {tiny_id}: {self.last_error['errors']}")
                   return None
              
              return data.get("retorno", {}).get("produto")
         except Exception as e:
+             self.last_error = {"code": None, "errors": [str(e)], "rate_limited": False}
              logger.error(f"Error fetching stock for product {tiny_id}: {e}")
              return None

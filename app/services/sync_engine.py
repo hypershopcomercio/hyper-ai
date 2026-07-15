@@ -2,6 +2,7 @@
 import logging
 import datetime
 import time 
+import threading
 import concurrent.futures
 import sqlalchemy
 from sqlalchemy import and_
@@ -25,6 +26,12 @@ from app.services.sync_v2.initial_load import InitialLoadService
 from app.services.sync_v2.incremental import IncrementalSyncService
 
 logger = logging.getLogger(__name__)
+
+# The web endpoint and the scheduled sync run in threads in the same backend
+# process. Tiny accepts only a small number of concurrent requests, therefore
+# only one physical-stock sync may run at a time.
+_tiny_stock_sync_lock = threading.Lock()
+_TINY_STOCK_FALLBACK_REQUESTS_PER_MINUTE = 19
 
 from app.models.ml_visit import MlVisit
 from app.models.ml_order import MlOrder, MlOrderItem
@@ -632,150 +639,204 @@ class SyncEngine:
         routine writes only ``tiny_stock`` (the local/physical location), and
         keeps pending local-sales movements on top of Tiny's raw balance until
         write-back to Tiny is enabled.
+
+        Tiny limits API calls per minute. This method intentionally performs
+        one stock request at a time, persists each successful product
+        immediately, and stops on a Tiny rate-limit response. That means a
+        temporary block never turns stock into zero and never discards the
+        products that were already updated.
         """
+        if not _tiny_stock_sync_lock.acquire(blocking=False):
+            logger.info("Tiny Stock Sync skipped: another stock sync is already running.")
+            return {
+                "success": False,
+                "busy": True,
+                "processed": 0,
+                "updated": 0,
+                "errors": 0,
+                "message": "Uma sincronização de estoque local já está em andamento.",
+            }
+
         logger.info("Starting Tiny Stock Sync...")
         start_time = datetime.datetime.now()
-        
-        self._log_sync("stock", "running", start_time=start_time)
-
         processed = 0
         success = 0
         error = 0
-        
+        rate_limited = False
+        total = 0
+
         try:
+            self._log_sync("stock", "running", start_time=start_time)
+
             # Do not limit this to Mercado Livre links: a local-only product
             # still needs correct physical stock at the counter.
             products = self.db.query(TinyProduct).filter(
                 TinyProduct.id.isnot(None), TinyProduct.sku.isnot(None), TinyProduct.sku != ""
             ).all()
+
+            # Each new run starts with products that have never had local
+            # stock persisted, then rotates through the oldest snapshots.
+            # This prevents a rate-limited run from restarting at the same
+            # first products on every scheduler cycle.
+            latest_by_sku = {
+                sku: last_updated
+                for sku, last_updated in self.db.query(
+                    TinyStock.sku, sqlalchemy.func.max(TinyStock.last_updated)
+                ).group_by(TinyStock.sku).all()
+                if sku
+            }
+            products.sort(key=lambda product: latest_by_sku.get(product.sku) or datetime.datetime.min)
+
             links_by_tiny_id = {}
             for link in self.db.query(AdTinyLink).all():
                 links_by_tiny_id.setdefault(str(link.tiny_product_id), []).append(link)
             total = len(products)
             logger.info(f"Checking local stock for {total} Tiny products.")
-            
+
+            request_interval = 60 / _TINY_STOCK_FALLBACK_REQUESTS_PER_MINUTE
+            last_request_at = None
             for tiny_prod in products:
                 processed += 1
+                sku = tiny_prod.sku
                 try:
-                    sku = tiny_prod.sku
-                    
+                    # Keep below Tiny's lowest documented limit (20/minute)
+                    # until its response gives this account's actual limit.
+                    if last_request_at is not None:
+                        elapsed = time.monotonic() - last_request_at
+                        if elapsed < request_interval:
+                            time.sleep(request_interval - elapsed)
+
                     # The Tiny endpoint requires its own product id, not SKU.
                     # A failed request must preserve the last known balance;
                     # never turn a product into zero just because an API call
                     # did not return a payload.
                     stock_data = self.tiny_service.get_stock(str(tiny_prod.id))
-                    
-                    if stock_data:
-                        # Tiny returns the aggregate balance and, when
-                        # configured, its physical deposits. Persist one row
-                        # per deposit so the counter can distinguish locations
-                        # from Mercado Livre Full (stored elsewhere).
-                        locations, uses_deposits = _tiny_stock_locations(stock_data)
-                        qty = sum(quantity for _, quantity in locations)
+                    last_request_at = time.monotonic()
+                    if not stock_data:
+                        api_error = self.tiny_service.last_error or {}
+                        if api_error.get("rate_limited"):
+                            rate_limited = True
+                            error += 1
+                            logger.warning("Tiny rate limit reached; stopping local stock sync without changing remaining products.")
+                            break
+                        error += 1
+                        continue
 
-                        # Local POS sales are recorded immediately in Hyper AI.
-                        # Until the Tiny write integration is enabled, preserve
-                        # those pending deltas when Tiny refreshes its raw saldo.
-                        from app.models.local_sales import InventoryMovement
-                        pending_delta = sum(
-                            int(m.quantity_delta or 0)
-                            for m in self.db.query(InventoryMovement).filter(
-                                InventoryMovement.sku == sku,
-                                InventoryMovement.sync_status == "pending",
-                            ).all()
-                        )
-                        
-                        current_time = datetime.datetime.now()
-                        location_names = {name for name, _ in locations}
-                        existing_rows = self.db.query(TinyStock).filter(TinyStock.sku == sku).all()
-                        rows_by_location = {row.warehouse: row for row in existing_rows if row.warehouse}
-                        legacy_names = {
-                            "Local (Tiny)", "Local (Tiny + Hyper)",
-                            "Estoque local (Tiny)", "Estoque local (Tiny + Hyper)",
-                        }
-                        for location_name, location_qty in locations:
-                            ts = rows_by_location.get(location_name)
-                            # Preserve the original aggregate row when Tiny
-                            # does not expose deposits, preventing a duplicate
-                            # local balance after this upgrade.
-                            if not ts and not uses_deposits:
-                                ts = next((row for row in existing_rows if row.warehouse in legacy_names), None)
-                            if not ts:
-                                ts = TinyStock(sku=sku, warehouse=location_name)
-                                self.db.add(ts)
-                            ts.warehouse = location_name
-                            ts.quantity = location_qty
-                            ts.reserved = 0
-                            ts.available = location_qty
-                            ts.last_updated = current_time
+                    # Tiny returns the aggregate balance and, when configured,
+                    # its physical deposits. Persist one row per deposit so the
+                    # counter can distinguish locations from Mercado Livre Full.
+                    locations, uses_deposits = _tiny_stock_locations(stock_data)
+                    qty = sum(quantity for _, quantity in locations)
 
-                        # Old releases stored a single aggregate row. Once
-                        # deposit-level data is available, zero that legacy
-                        # value so it cannot be summed twice in the POS.
-                        if uses_deposits:
-                            for row in existing_rows:
-                                if row.warehouse in legacy_names and row.warehouse not in location_names:
-                                    row.quantity = 0
-                                    row.available = 0
-                                    row.reserved = 0
-                                    row.last_updated = current_time
+                    # Local POS sales are recorded immediately in Hyper AI.
+                    # Until the Tiny write integration is enabled, preserve
+                    # those pending deltas when Tiny refreshes its raw saldo.
+                    from app.models.local_sales import InventoryMovement
+                    pending_delta = sum(
+                        int(m.quantity_delta or 0)
+                        for m in self.db.query(InventoryMovement).filter(
+                            InventoryMovement.sku == sku,
+                            InventoryMovement.sync_status == "pending",
+                        ).all()
+                    )
 
-                        # Local sales are not written to Tiny yet. Keep their
-                        # net movement in a dedicated virtual local location,
-                        # instead of attaching it to a random physical deposit.
-                        adjustment_name = "Ajustes de venda local (Hyper AI)"
-                        adjustment = rows_by_location.get(adjustment_name)
-                        if pending_delta or adjustment:
-                            if not adjustment:
-                                adjustment = TinyStock(sku=sku, warehouse=adjustment_name)
-                                self.db.add(adjustment)
-                            adjustment.quantity = 0
-                            adjustment.reserved = 0
-                            adjustment.available = pending_delta
-                            adjustment.last_updated = current_time
-                        tiny_prod.stock = qty
-                        
-                        # Update Ad Divergence
-                        for link in links_by_tiny_id.get(str(tiny_prod.id), []):
-                            ad = self.db.query(Ad).filter(Ad.id == link.ad_id).first()
-                            if ad:
-                                ad.stock_tiny = qty
-                                ad.stock_divergence = ad.available_quantity - qty
-                    
-                    # 2. Sync Cost (Enhanced to fix stale cost issue)
-                    # We use the ID to fetching details which includes 'preco_custo'
-                    if tiny_prod.id:
-                        details = self.tiny_service.get_product_details(str(tiny_prod.id))
-                        if details:
-                             # Update Cost
-                             new_cost = float(details.get("preco_custo", 0.0))
-                             tiny_prod.cost = new_cost
-                             tiny_prod.name = details.get("nome", tiny_prod.name) # Update name too
-                             tiny_prod.last_updated = datetime.datetime.now()
-                             
-                             # Update Ad Cost immediately if linked
-                             for link in links_by_tiny_id.get(str(tiny_prod.id), []):
-                                 ad = self.db.query(Ad).filter(Ad.id == link.ad_id).first()
-                                 if ad:
-                                     ad.cost = new_cost
-                                     # ad.last_updated = datetime.datetime.now() # Don't update ad timestamp to avoid trigger loop?
-                                 
+                    current_time = datetime.datetime.now()
+                    location_names = {name for name, _ in locations}
+                    existing_rows = self.db.query(TinyStock).filter(TinyStock.sku == sku).all()
+                    rows_by_location = {row.warehouse: row for row in existing_rows if row.warehouse}
+                    legacy_names = {
+                        "Local (Tiny)", "Local (Tiny + Hyper)",
+                        "Estoque local (Tiny)", "Estoque local (Tiny + Hyper)",
+                    }
+                    for location_name, location_qty in locations:
+                        ts = rows_by_location.get(location_name)
+                        if not ts and not uses_deposits:
+                            ts = next((row for row in existing_rows if row.warehouse in legacy_names), None)
+                        if not ts:
+                            ts = TinyStock(sku=sku, warehouse=location_name)
+                            self.db.add(ts)
+                        ts.warehouse = location_name
+                        ts.quantity = location_qty
+                        ts.reserved = 0
+                        ts.available = location_qty
+                        ts.last_updated = current_time
+
+                    # Old releases stored a single aggregate row. Once Tiny
+                    # exposes deposits, zero the legacy row to avoid summing it
+                    # twice in the local sales screen.
+                    if uses_deposits:
+                        for row in existing_rows:
+                            if row.warehouse in legacy_names and row.warehouse not in location_names:
+                                row.quantity = 0
+                                row.available = 0
+                                row.reserved = 0
+                                row.last_updated = current_time
+
+                    adjustment_name = "Ajustes de venda local (Hyper AI)"
+                    adjustment = rows_by_location.get(adjustment_name)
+                    if pending_delta or adjustment:
+                        if not adjustment:
+                            adjustment = TinyStock(sku=sku, warehouse=adjustment_name)
+                            self.db.add(adjustment)
+                        adjustment.quantity = 0
+                        adjustment.reserved = 0
+                        adjustment.available = pending_delta
+                        adjustment.last_updated = current_time
+                    tiny_prod.stock = qty
+
+                    for link in links_by_tiny_id.get(str(tiny_prod.id), []):
+                        ad = self.db.query(Ad).filter(Ad.id == link.ad_id).first()
+                        if ad:
+                            ad.stock_tiny = qty
+                            ad.stock_divergence = ad.available_quantity - qty
+
+                    # Commit every product. A timeout, a rate limit, or an
+                    # interrupted manual execution cannot erase earlier stock
+                    # updates in the same run.
+                    self.db.commit()
                     success += 1
+
+                    if self.tiny_service.last_rate_limit:
+                        request_interval = max(60 / self.tiny_service.last_rate_limit, 0.1)
                 except Exception as e_stock:
+                    self.db.rollback()
                     logger.error(f"Stock/Cost Sync failed for Tiny product {tiny_prod.id} ({sku}): {e_stock}")
                     error += 1
-            
-            self.db.commit()
-            self._log_sync("stock", "success", processed, success, error, start_time=start_time)
-            
-            # Also sync variation costs from order items
-            logger.info("Triggering Variation Costs Sync after Stock Sync...")
-            self.sync_variation_costs()
-            
+
+            complete = not rate_limited and processed == total and error == 0
+            message = (
+                "Limite de chamadas do Tiny atingido; os produtos já atualizados foram salvos e a próxima execução continua pelos mais antigos."
+                if rate_limited else
+                f"Estoque local atualizado: {success} de {total} produtos."
+            )
+            status = "success" if not rate_limited else "partial"
+            self._log_sync("stock", status, processed, success, error, message, start_time=start_time)
+            return {
+                "success": not rate_limited,
+                "busy": False,
+                "processed": processed,
+                "updated": success,
+                "errors": error,
+                "total": total,
+                "complete": complete,
+                "rate_limited": rate_limited,
+                "message": message,
+            }
         except Exception as e:
             self.db.rollback()
             logger.error(f"Stock Sync Failed: {e}")
             self._log_sync("stock", "error", processed, success, error, str(e), start_time=start_time)
+            return {
+                "success": False,
+                "busy": False,
+                "processed": processed,
+                "updated": success,
+                "errors": error + 1,
+                "total": total,
+                "message": str(e),
+            }
+        finally:
+            _tiny_stock_sync_lock.release()
 
     def _update_visits_metric(self, ad: Ad):
         # Meli API for visits

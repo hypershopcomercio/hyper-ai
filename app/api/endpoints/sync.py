@@ -100,10 +100,16 @@ from app.services.sync_engine import SyncEngine
 def sync_tiny():
     engine = SyncEngine()
     try:
-        engine.sync_tiny_stock()
-        return jsonify({"success": True, "message": "Tiny ERP Sync Triggered"})
+        result = engine.sync_tiny_stock()
+        if result.get("busy"):
+            return jsonify(result), 409
+        if result.get("rate_limited"):
+            return jsonify(result), 429
+        return jsonify(result)
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        engine.db.close()
 
 from app.models.oauth_token import OAuthToken
 from app.models.ad import Ad

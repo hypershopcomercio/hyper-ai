@@ -153,11 +153,11 @@ export default function LocalSalesPage() {
     const syncLocalStock = async () => {
         setSyncingStock(true);
         try {
-            await api.post("/sync/tiny");
+            const response = await api.post("/sync/tiny");
             await loadData();
-            toast.success("Estoque local atualizado pelo Tiny.");
+            toast.success(response.data?.message || "Estoque local atualizado pelo Tiny.");
         } catch (error: any) {
-            toast.error(error?.response?.data?.error || "Não foi possível atualizar o estoque local.");
+            toast.error(error?.response?.data?.message || error?.response?.data?.error || "Não foi possível atualizar o estoque local.");
         } finally {
             setSyncingStock(false);
         }
