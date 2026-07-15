@@ -51,8 +51,15 @@ def _product_maps(db):
         ads_by_sku.setdefault(ad.sku.strip(), ad)
 
     stock_by_sku = defaultdict(int)
+    locations_by_sku = defaultdict(list)
+    last_updated_by_sku = {}
     for row in db.query(TinyStock).filter(TinyStock.sku.isnot(None), TinyStock.sku != "").all():
-        stock_by_sku[row.sku.strip()] += int(row.available if row.available is not None else (row.quantity or 0))
+        sku = row.sku.strip()
+        quantity = int(row.available if row.available is not None else (row.quantity or 0))
+        stock_by_sku[sku] += quantity
+        locations_by_sku[sku].append({"name": row.warehouse or "Estoque local", "available": quantity})
+        if row.last_updated and (sku not in last_updated_by_sku or row.last_updated > last_updated_by_sku[sku]):
+            last_updated_by_sku[sku] = row.last_updated
 
     products_by_sku = {}
     for product in products:
@@ -60,7 +67,7 @@ def _product_maps(db):
         # Keep the first matching Tiny catalog entry; duplicate SKUs are
         # catalog-quality problems and must not become duplicate POS lines.
         products_by_sku.setdefault(sku, product)
-    return products_by_sku, ads_by_sku, stock_by_sku
+    return products_by_sku, ads_by_sku, stock_by_sku, locations_by_sku, last_updated_by_sku
 
 
 def _price_for_product(db, product, ad, saved_price=None, requested_margin=None):
@@ -136,7 +143,7 @@ def _price_for_product(db, product, ad, saved_price=None, requested_margin=None)
 
 
 def _catalog_rows(db, search=None, only_bac=False, requested_margin=None):
-    products_by_sku, ads_by_sku, stock_by_sku = _product_maps(db)
+    products_by_sku, ads_by_sku, stock_by_sku, locations_by_sku, last_updated_by_sku = _product_maps(db)
     prices_by_sku = {
         p.sku: p for p in db.query(LocalProductPrice).filter(LocalProductPrice.channel_key == "local").all()
     }
@@ -158,6 +165,8 @@ def _catalog_rows(db, search=None, only_bac=False, requested_margin=None):
             "ad_id": ad.id if ad else None,
             "thumbnail": ad.thumbnail if ad and ad.thumbnail else None,
             "stock_available": stock_by_sku.get(sku, int(product.stock or 0)),
+            "stock_locations": locations_by_sku.get(sku, [{"name": "Estoque local", "available": int(product.stock or 0)}]),
+            "stock_last_updated": last_updated_by_sku[sku].isoformat() if sku in last_updated_by_sku else None,
             "tiny_cost": _money(product.cost),
             "has_fiscal_profile": bool(ad and db.query(ProductTaxProfile.id).filter(
                 ProductTaxProfile.mlb_id == ad.id, ProductTaxProfile.is_active == True
@@ -236,7 +245,7 @@ def update_local_product_price(sku):
     db = SessionLocal()
     try:
         _ensure_local_channel(db)
-        products_by_sku, ads_by_sku, _ = _product_maps(db)
+        products_by_sku, ads_by_sku, _, _, _ = _product_maps(db)
         product = products_by_sku.get(sku)
         if not product:
             return jsonify({"success": False, "error": "Produto não encontrado para este SKU."}), 404
@@ -321,7 +330,7 @@ def create_local_sale():
     db = SessionLocal()
     try:
         _ensure_local_channel(db)
-        products_by_sku, ads_by_sku, _ = _product_maps(db)
+        products_by_sku, ads_by_sku, _, _, _ = _product_maps(db)
         locked_stock = {}
         for sku, quantity in requested_quantities.items():
             product = products_by_sku.get(sku)

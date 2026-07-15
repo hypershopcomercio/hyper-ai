@@ -80,7 +80,7 @@ class TinyApiService:
             logger.error(f"Error getting details for ID {tiny_id}: {e}")
             return None
 
-    def get_stock(self, sku: str):
+    def get_stock(self, tiny_id: str):
         """
         Fetch stock for a specific SKU.
         Endpoint: /produto.obter.estoque.php
@@ -91,7 +91,9 @@ class TinyApiService:
         url = f"{self.base_url}/produto.obter.estoque.php"
         params = {
             "token": self.token,
-            "id": sku, # Using SKU as ID usually works or "codigo" param
+            # This endpoint expects the Tiny product ID. Passing the SKU here
+            # silently returns no stock for many accounts.
+            "id": tiny_id,
             "formato": "json"
         }
         # Docs say param 'id' is for ID or SKU? Usually 'id' is Tiny ID. 
@@ -109,10 +111,10 @@ class TinyApiService:
              
              if data.get("retorno", {}).get("status") == "Erro":
                   # Try searching if ID fail? No, caller handles it.
-                  logger.warning(f"Tiny Stock Error for {sku}: {data['retorno'].get('erros')}")
+                  logger.warning(f"Tiny Stock Error for product {tiny_id}: {data['retorno'].get('erros')}")
                   return None
              
              return data.get("retorno", {}).get("produto")
         except Exception as e:
-             logger.error(f"Error fetching stock for {sku}: {e}")
+             logger.error(f"Error fetching stock for product {tiny_id}: {e}")
              return None

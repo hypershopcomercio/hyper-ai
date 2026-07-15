@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, History, Minus, PackageSearch, Plus, Search, ShoppingCart, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, History, Minus, PackageSearch, Plus, RefreshCw, Search, ShoppingCart, Trash2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 
@@ -10,6 +10,8 @@ type Product = {
     name: string;
     thumbnail?: string | null;
     stock_available: number;
+    stock_locations?: Array<{ name: string; available: number }>;
+    stock_last_updated?: string | null;
     selling_price: number;
     status: string;
 };
@@ -38,6 +40,7 @@ export default function LocalSalesPage() {
     const [notes, setNotes] = useState("");
     const [loading, setLoading] = useState(true);
     const [finishing, setFinishing] = useState(false);
+    const [syncingStock, setSyncingStock] = useState(false);
     const [sales, setSales] = useState<Sale[]>([]);
 
     const loadData = async () => {
@@ -147,6 +150,19 @@ export default function LocalSalesPage() {
         }
     };
 
+    const syncLocalStock = async () => {
+        setSyncingStock(true);
+        try {
+            await api.post("/sync/tiny");
+            await loadData();
+            toast.success("Estoque local atualizado pelo Tiny.");
+        } catch (error: any) {
+            toast.error(error?.response?.data?.error || "Não foi possível atualizar o estoque local.");
+        } finally {
+            setSyncingStock(false);
+        }
+    };
+
     return (
         <div className="min-h-screen bg-[#0a0a0f] text-white p-5 md:p-8">
             <div className="max-w-7xl mx-auto space-y-6">
@@ -156,8 +172,13 @@ export default function LocalSalesPage() {
                         <h1 className="text-3xl font-bold tracking-tight">Venda Local</h1>
                         <p className="text-sm text-slate-400 mt-1">Venda rápida, sem dados obrigatórios, com baixa imediata no estoque do Hyper AI.</p>
                     </div>
-                    <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">
-                        As baixas aguardam integração de escrita com o Tiny.
+                    <div className="flex items-center gap-2">
+                        <button onClick={() => void syncLocalStock()} disabled={syncingStock} className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-60 flex items-center gap-1.5">
+                            <RefreshCw className={`w-3.5 h-3.5 ${syncingStock ? "animate-spin" : ""}`} /> {syncingStock ? "Atualizando..." : "Atualizar estoque local"}
+                        </button>
+                        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">
+                            As baixas aguardam integração de escrita com o Tiny.
+                        </div>
                     </div>
                 </header>
 
@@ -185,7 +206,7 @@ export default function LocalSalesPage() {
                                                 ) : (
                                                     <span className="h-11 w-11 shrink-0 rounded-lg border border-white/10 bg-white/5 flex items-center justify-center"><PackageSearch className="w-5 h-5 text-slate-500" /></span>
                                                 )}
-                                                <span className="min-w-0"><span className="block text-sm font-medium truncate">{product.name}</span><span className="text-xs text-slate-500">{product.sku} · Estoque {product.stock_available}</span></span>
+                                                <span className="min-w-0"><span className="block text-sm font-medium truncate">{product.name}</span><span className="text-xs text-slate-500">{product.sku} · Local: {product.stock_available} {product.stock_locations?.length ? `(${product.stock_locations.map(location => `${location.name}: ${location.available}`).join(" · ")})` : ""}</span></span>
                                             </span>
                                             <span className="font-semibold text-cyan-300 whitespace-nowrap">{money(product.selling_price)}</span>
                                         </button>

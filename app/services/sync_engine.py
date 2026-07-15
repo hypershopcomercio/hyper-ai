@@ -31,6 +31,35 @@ from app.models.ml_order import MlOrder, MlOrderItem
 from app.models.tiny_stock import TinyStock
 from app.models.ml_metrics_daily import MlMetricsDaily
 
+
+def _tiny_number(value) -> int:
+    """Tiny returns decimal strings; local stock is handled in whole units."""
+    return int(float(value or 0))
+
+
+def _tiny_stock_locations(stock_data: dict):
+    """Normalize Tiny's aggregate/deposit stock response.
+
+    Tiny exposes the physical deposits in ``produto.depositos``. Deposits
+    flagged ``desconsiderar=S`` are intentionally excluded from its sellable
+    total, so they must not inflate the counter stock either.
+    """
+    locations = []
+    for wrapped in stock_data.get("depositos") or []:
+        deposit = wrapped.get("deposito", wrapped) if isinstance(wrapped, dict) else {}
+        if not isinstance(deposit, dict) or str(deposit.get("desconsiderar", "N")).upper() == "S":
+            continue
+        name = str(deposit.get("nome") or "Estoque local").strip()
+        company = str(deposit.get("empresa") or "").strip()
+        label = f"{company} · {name}" if company and company.lower() != name.lower() else name
+        locations.append((label, _tiny_number(deposit.get("saldo"))))
+
+    if locations:
+        return locations, True
+    if stock_data.get("saldo") is None:
+        raise ValueError("Tiny returned stock payload without saldo or deposits")
+    return [("Estoque local (Tiny)", _tiny_number(stock_data.get("saldo")))], False
+
 class SyncEngine:
     def __init__(self):
         self.db = SessionLocal()
@@ -597,7 +626,13 @@ class SyncEngine:
             pass
 
     def sync_tiny_stock(self):
-        """Syncs stock from Tiny for all linked products."""
+        """Synchronize physical local stock from Tiny, independently of Full.
+
+        ``full_inventory`` remains the source for Mercado Livre Full. This
+        routine writes only ``tiny_stock`` (the local/physical location), and
+        keeps pending local-sales movements on top of Tiny's raw balance until
+        write-back to Tiny is enabled.
+        """
         logger.info("Starting Tiny Stock Sync...")
         start_time = datetime.datetime.now()
         
@@ -608,28 +643,35 @@ class SyncEngine:
         error = 0
         
         try:
-            # Iterate over TinyProducts (or AdTinyLinks)
-            # Better to iterate AdTinyLinks to focus on relevant SKUs
-            links = self.db.query(AdTinyLink).all()
-            total = len(links)
-            logger.info(f"Checking stock for {total} linked products.")
+            # Do not limit this to Mercado Livre links: a local-only product
+            # still needs correct physical stock at the counter.
+            products = self.db.query(TinyProduct).filter(
+                TinyProduct.id.isnot(None), TinyProduct.sku.isnot(None), TinyProduct.sku != ""
+            ).all()
+            links_by_tiny_id = {}
+            for link in self.db.query(AdTinyLink).all():
+                links_by_tiny_id.setdefault(str(link.tiny_product_id), []).append(link)
+            total = len(products)
+            logger.info(f"Checking local stock for {total} Tiny products.")
             
-            for link in links:
+            for tiny_prod in products:
                 processed += 1
                 try:
-                    tiny_prod = self.db.query(TinyProduct).filter(TinyProduct.id == link.tiny_product_id).first()
-                    if not tiny_prod or not tiny_prod.sku:
-                        continue
-                        
                     sku = tiny_prod.sku
                     
-                    # 1. Sync Stock
-                    stock_data = self.tiny_service.get_stock(sku)
+                    # The Tiny endpoint requires its own product id, not SKU.
+                    # A failed request must preserve the last known balance;
+                    # never turn a product into zero just because an API call
+                    # did not return a payload.
+                    stock_data = self.tiny_service.get_stock(str(tiny_prod.id))
                     
                     if stock_data:
-                        # stock_data is dict: {id, nome, codigo, saldo, ...}
-                        # "saldo" is the quantity
-                        qty = int(stock_data.get("saldo", 0))
+                        # Tiny returns the aggregate balance and, when
+                        # configured, its physical deposits. Persist one row
+                        # per deposit so the counter can distinguish locations
+                        # from Mercado Livre Full (stored elsewhere).
+                        locations, uses_deposits = _tiny_stock_locations(stock_data)
+                        qty = sum(quantity for _, quantity in locations)
 
                         # Local POS sales are recorded immediately in Hyper AI.
                         # Until the Tiny write integration is enabled, preserve
@@ -643,25 +685,62 @@ class SyncEngine:
                             ).all()
                         )
                         
-                        # Upsert TinyStock
-                        ts = self.db.query(TinyStock).filter(TinyStock.sku == sku).first()
-                        if not ts:
-                            ts = TinyStock(sku=sku)
-                            self.db.add(ts)
-                        ts.quantity = qty
-                        ts.reserved = 0
-                        # Tiny returns the sellable balance in ``saldo``. Keep
-                        # the same value in the normalized field consumed by
-                        # replenishment planning and label the current source.
-                        ts.available = qty + pending_delta
-                        ts.warehouse = "Local (Tiny + Hyper)" if pending_delta else "Local (Tiny)"
-                        ts.last_updated = datetime.datetime.now()
+                        current_time = datetime.datetime.now()
+                        location_names = {name for name, _ in locations}
+                        existing_rows = self.db.query(TinyStock).filter(TinyStock.sku == sku).all()
+                        rows_by_location = {row.warehouse: row for row in existing_rows if row.warehouse}
+                        legacy_names = {
+                            "Local (Tiny)", "Local (Tiny + Hyper)",
+                            "Estoque local (Tiny)", "Estoque local (Tiny + Hyper)",
+                        }
+                        for location_name, location_qty in locations:
+                            ts = rows_by_location.get(location_name)
+                            # Preserve the original aggregate row when Tiny
+                            # does not expose deposits, preventing a duplicate
+                            # local balance after this upgrade.
+                            if not ts and not uses_deposits:
+                                ts = next((row for row in existing_rows if row.warehouse in legacy_names), None)
+                            if not ts:
+                                ts = TinyStock(sku=sku, warehouse=location_name)
+                                self.db.add(ts)
+                            ts.warehouse = location_name
+                            ts.quantity = location_qty
+                            ts.reserved = 0
+                            ts.available = location_qty
+                            ts.last_updated = current_time
+
+                        # Old releases stored a single aggregate row. Once
+                        # deposit-level data is available, zero that legacy
+                        # value so it cannot be summed twice in the POS.
+                        if uses_deposits:
+                            for row in existing_rows:
+                                if row.warehouse in legacy_names and row.warehouse not in location_names:
+                                    row.quantity = 0
+                                    row.available = 0
+                                    row.reserved = 0
+                                    row.last_updated = current_time
+
+                        # Local sales are not written to Tiny yet. Keep their
+                        # net movement in a dedicated virtual local location,
+                        # instead of attaching it to a random physical deposit.
+                        adjustment_name = "Ajustes de venda local (Hyper AI)"
+                        adjustment = rows_by_location.get(adjustment_name)
+                        if pending_delta or adjustment:
+                            if not adjustment:
+                                adjustment = TinyStock(sku=sku, warehouse=adjustment_name)
+                                self.db.add(adjustment)
+                            adjustment.quantity = 0
+                            adjustment.reserved = 0
+                            adjustment.available = pending_delta
+                            adjustment.last_updated = current_time
+                        tiny_prod.stock = qty
                         
                         # Update Ad Divergence
-                        ad = self.db.query(Ad).filter(Ad.id == link.ad_id).first()
-                        if ad:
-                            ad.stock_tiny = qty
-                            ad.stock_divergence = ad.available_quantity - qty
+                        for link in links_by_tiny_id.get(str(tiny_prod.id), []):
+                            ad = self.db.query(Ad).filter(Ad.id == link.ad_id).first()
+                            if ad:
+                                ad.stock_tiny = qty
+                                ad.stock_divergence = ad.available_quantity - qty
                     
                     # 2. Sync Cost (Enhanced to fix stale cost issue)
                     # We use the ID to fetching details which includes 'preco_custo'
@@ -675,14 +754,15 @@ class SyncEngine:
                              tiny_prod.last_updated = datetime.datetime.now()
                              
                              # Update Ad Cost immediately if linked
-                             ad = self.db.query(Ad).filter(Ad.id == link.ad_id).first()
-                             if ad:
-                                 ad.cost = new_cost
-                                 # ad.last_updated = datetime.datetime.now() # Don't update ad timestamp to avoid trigger loop?
+                             for link in links_by_tiny_id.get(str(tiny_prod.id), []):
+                                 ad = self.db.query(Ad).filter(Ad.id == link.ad_id).first()
+                                 if ad:
+                                     ad.cost = new_cost
+                                     # ad.last_updated = datetime.datetime.now() # Don't update ad timestamp to avoid trigger loop?
                                  
                     success += 1
                 except Exception as e_stock:
-                    logger.error(f"Stock/Cost Sync failed for link {link.id}: {e_stock}")
+                    logger.error(f"Stock/Cost Sync failed for Tiny product {tiny_prod.id} ({sku}): {e_stock}")
                     error += 1
             
             self.db.commit()

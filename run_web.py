@@ -23,6 +23,9 @@ if __name__ == "__main__":
             # User wants data. Let's run full sync.
             engine.sync_orders()
             engine.sync_ads()
+            # Local physical stock (Tiny) is distinct from Full stock. Keep
+            # the counter inventory fresh every scheduler cycle as well.
+            engine.sync_tiny_stock()
             # engine.sync_visits() # Visits take long. Maybe separate job?
             # For now, let's include orders which is critical for revenue.
             print("SCHEDULER: Orders/Ads Sync Complete.")
